@@ -19,28 +19,31 @@ canvas{display:block;position:absolute;left:0;top:0}
 <canvas id="c"></canvas><div id="lbl"></div><div id="snd">&#128263;</div>
 <script>
 // ================= ENGINE (no DOM; tested by test.js) =================
-// Layout follows the "Time Machine" rolling-ball marble-run clock (see ref/NOTES.md)
-var W = 1000, H = 700, R = 17, SP = 37, NBALLS = 30;
-var ACC = 0.0006, GRAV = 0.0026;
-function rail(lx, ly, hx, hy) { var dx = hx - lx, dy = hy - ly, L = Math.sqrt(dx * dx + dy * dy); return { lx: lx, ly: ly, hx: hx, hy: hy, ux: dx / L, uy: dy / L, len: L, tip: -1e9, hold: 0 }; }
-var RAILS = { min: rail(905, 182, 405, 152), five: rail(70, 318, 935, 282), hour: rail(70, 512, 940, 476) };
-var CHUTE = { x0: 35, y0: 392, x1: 955, y1: 432 };
-var DROPX = { min: 950, five: 30, hour: 30 };
-var TRAY = { cx: 500, cy: 642, x0: 10, x1: 990 };
-var ARM = { x: 500, y: 382, r: 242 };
+// v6 geometry follows the Time Machine 12:59 reset video (ref2/NOTES.md):
+// every rail pivots near its LEFT end (counterweight on the short left arm), balls queue from the left,
+// new balls enter at the RIGHT end; the trigger ball tips the right end down and everything runs off the right.
+var W = 1000, H = 700, R = 27, SP = 58, NBALLS = 28;
+var ACC = 0.0011, ACC_TIP = 0.0045, GRAV = 0.0026;
+function rail(lx, ly, hx, hy, off0, A) { var dx = hx - lx, dy = hy - ly, L = Math.sqrt(dx * dx + dy * dy);
+  return { lx: lx, ly: ly, hx: hx, hy: hy, ux: dx / L, uy: dy / L, len: L, tip: -1e9, hold: 0, off0: off0, A: A, px: lx + 26, py: ly + 14 }; }
+var RAILS = { min: rail(530, 192, 925, 174, SP, 0.17), five: rail(120, 352, 925, 322, SP, 0.115), hour: rail(120, 522, 925, 492, 0, 0.095) };
+var DROPX = { min: 972, five: 972, hour: 972 };
+var TRAY = { cx: 760, cy: 660, x0: 10, x1: 995 };
+var ARM = { x: 760, y: 660 - R - 1 - 228, r: 228 };
 var balls = [], res = [], C = { min: [], five: [], hour: [] }, fixedBall, now = 0, liftBall = null, soundHook = null;
 function tipAngle(r, t) { return tipScript(r, t) + (r.sag || 0); }
-function tipScript(r, t) {
-  var el = t - r.tip, A = 0.045 * (r.ux > 0 ? -1 : 1);
-  if (el < 0 || el > r.hold + 2600) return 0;
-  if (el < 200) { var k = el / 200; return A * k * k; }
+function tipScript(r, t) {   // measured from the video: ~0.2 s down, hold while the balls stream off, fast damped return
+  var el = t - r.tip, A = r.A;
+  if (el < 0 || el > r.hold + 1800) return 0;
+  if (el < 180) { var k = el / 180; return A * k * k; }
   if (el < r.hold) return A;
-  var s = el - r.hold; return A * Math.exp(-s / 320) * Math.cos(s / 75);
+  var s = el - r.hold; return A * Math.exp(-s / 150) * Math.cos(s / 48);
 }
-function rot(r, p, a) { if (!a) return p; var dx = p.x - r.hx, dy = p.y - r.hy, c = Math.cos(a), s = Math.sin(a); return { x: r.hx + dx * c - dy * s, y: r.hy + dx * s + dy * c }; }
-function slotPos(r, i) { var d = R + 4 + i * SP; return { x: r.lx + r.ux * d, y: r.ly + r.uy * d - (R + 1) }; }
-function trayY(x) { return TRAY.cy - Math.abs(x - TRAY.cx) * 0.04 - R - 1; }
-function trayPos(i) { var row = i < 26 ? 0 : 1, j = row ? i - 26 : i, k = Math.floor(j / 2) + 0.5 + row * 0.5, x = TRAY.cx + (j % 2 ? -1 : 1) * k * (2 * R + 0.6); return { x: x, y: trayY(x) - row * 2 * R * 0.85 }; }
+function rot(r, p, a) { if (!a) return p; var dx = p.x - r.px, dy = p.y - r.py, c = Math.cos(a), s = Math.sin(a); return { x: r.px + dx * c - dy * s, y: r.py + dx * s + dy * c }; }
+function slotPos(r, i) { var d = R + 6 + r.off0 + i * SP; return { x: r.lx + r.ux * d, y: r.ly + r.uy * d - (R + 1) }; }
+function endPos(r) { return { x: r.hx + 4, y: r.hy - R - 1 }; }
+function trayY(x) { return TRAY.cy - (x < TRAY.cx ? (TRAY.cx - x) * 0.035 : (x - TRAY.cx) * 0.12) - R - 1; }
+function trayPos(i) { var row = Math.floor(i / 14), j = i % 14, x = TRAY.cx - (j + row * 0.5) * (2 * R + 0.6); return { x: x, y: trayY(x) - row * 2 * R * 0.86 }; }
 function restPos(b) {
   var i;
   if ((i = res.indexOf(b)) >= 0) return trayPos(i);
@@ -60,80 +63,76 @@ function setup(h, m) {
   for (i = 0; i < mm; i++) C.min.push(res.shift());
   for (i = 0; i < f; i++) C.five.push(res.shift());
   for (i = 0; i < h12 - 1; i++) C.hour.push(res.shift());
+  updateLevers(0);
   var all = balls.concat([fixedBall]);
   for (i = 0; i < all.length; i++) { var p = restPos(all[i]); all[i].x = p.x; all[i].y = p.y; all[i].vx = all[i].vy = 0; all[i].segs = []; }
 }
 function seg(b, x, y, d, e, snd, bk) { b.segs.push({ x: x, y: y, d: d, e: e || 'lin', snd: snd || 0, bk: !!bk }); return d; }
 function wait(b, d, bk) { return seg(b, null, null, d, 'lin', 0, bk); }
 function dist(x0, y0, x1, y1) { var dx = x1 - x0, dy = y1 - y0; return Math.sqrt(dx * dx + dy * dy); }
-function rollT(L) { return Math.max(110, Math.sqrt(2 * L / ACC)); }
+function rollT(L, a) { return Math.max(90, Math.sqrt(2 * L / (a || ACC))); }
 function fallT(h) { return Math.max(60, Math.sqrt(2 * Math.max(1, h) / GRAV)); }
-function railBounce(b, x, y, r, vol) {
+function railBounce(b, x, y, r, vol) {   // the incoming ball rolls left and knocks against the queue
   var T = 0;
-  T += seg(b, x + r.ux * 3.5, y + r.uy * 3.5, 100, 'out'); T += seg(b, x, y, 100, 'in', vol * 0.4);
-  T += seg(b, x + r.ux, y + r.uy, 55, 'out'); T += seg(b, x, y, 55, 'in');
+  T += seg(b, x + r.ux * 4, y + r.uy * 4, 90, 'out'); T += seg(b, x, y, 90, 'in', vol * 0.4);
+  T += seg(b, x + r.ux * 1.2, y + r.uy * 1.2, 50, 'out'); T += seg(b, x, y, 50, 'in');
   return T;
 }
-function landBounce(b, x, y, vol) {   // lands in the back trough, rattles, then the queue settles
-  var T = 0, s = x > TRAY.cx ? -1 : 1;
-  T += seg(b, x + s * 3, y - 9, 140, 'out', 0, 1); T += seg(b, x + s * 6, y, 140, 'in', vol * 0.5, 1);
-  T += seg(b, x + s * 8, y - 3, 75, 'out', 0, 1); T += seg(b, x + s * 9, y, 75, 'in', vol * 0.2, 1);
+function landBounce(b, x, y, vol) {
+  var T = 0;
+  T += seg(b, x - 6, y - 12, 140, 'out', 0, 1); T += seg(b, x - 12, y, 140, 'in', vol * 0.5, 1);
+  T += seg(b, x - 16, y - 4, 80, 'out', 0, 1); T += seg(b, x - 19, y, 80, 'in', vol * 0.2, 1);
   return T;
 }
-function dropOff(b, r, key, from) {   // roll off the low end and fall behind the front rails into the trough
-  var ex = r.lx - r.ux * 4, ey = r.ly - r.uy * 4 - R - 1, T = 0;
-  T += seg(b, ex, ey, rollT(dist(from.x, from.y, ex, ey) + 8), 'in');
-  var ty = trayY(DROPX[key]);
-  T += seg(b, DROPX[key], ty, fallT(ty - ey) * 1.05, 'para', 1, 1);
-  T += landBounce(b, DROPX[key], ty, 0.8);
+function runOff(b, r, from, toBack) {   // on the tipped rail: roll right with gravity, leave the right end
+  var e = rot(r, endPos(r), r.A);
+  return seg(b, e.x, e.y, rollT(dist(from.x, from.y, e.x, e.y) + 6, ACC_TIP), 'in', 0, toBack);
+}
+function fallToTray(b, sx, sy) {
+  var x = DROPX.min, ty = trayY(x), T = 0;
+  T += seg(b, x, ty, fallT(ty - sy) * 1.05, 'para', 0.9, 1);
+  T += landBounce(b, x, ty, 0.8);
   return T;
 }
-function dump(list, key, T) {
-  var r = RAILS[key], maxT = 0, A = 0.045 * (r.ux > 0 ? -1 : 1);
+function dump(list, key, T) {   // everything on the rail streams off the right end as a chain, rightmost first
+  var r = RAILS[key], last = 0, n = list.length;
   r.tip = now + T;
-  for (var k = 0; k < list.length; k++) {
-    var b = list[k], p = slotPos(r, key === 'hour' ? k + 1 : k);
+  for (var k = n - 1; k >= 0; k--) {
+    var b = list[k], p = slotPos(r, key === 'hour' ? k + 1 : k), delay = T + 130 + (n - 1 - k) * 22;
     b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y;
-    b.segs.push({ x: null, y: null, d: T + 160 + k * 40, e: 'lin', fol: { r: r, p: p } });
-    var pr = rot(r, p, A); seg(b, pr.x, pr.y, 140, 'in');
-    dropOff(b, r, key, pr);
-    maxT = Math.max(maxT, T + 160 + k * 40 + 400);
+    b.segs.push({ x: null, y: null, d: delay, e: 'lin', fol: { r: r, p: p } });
+    var pr = rot(r, p, r.A), d = runOff(b, r, pr, false);
+    var e = rot(r, endPos(r), r.A);
+    fallToTray(b, e.x, e.y);
+    last = Math.max(last, delay + d);
     res.push(b);
   }
-  r.hold = Math.max(500, maxT - T);
+  r.hold = Math.max(450, last - T + 60);
 }
 function tick() {
   var b = res.shift(), T = 0, p;
   b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y; liftBall = b;
-  var py = ARM.y + ARM.r;
-  T += seg(b, ARM.x, py, 360, 'in', 0.5, 1);                    // rolls into the arm's cup at the bottom of the trough
-  var r = RAILS.min, tx = r.hx - r.ux * 6, ty = r.hy - r.uy * 6 - R - 1;
-  var a1 = Math.atan2(ty - 10 - ARM.y, tx - ARM.x); if (a1 < Math.PI / 2) a1 += 2 * Math.PI;
-  var sg = { x: ARM.x + Math.cos(a1) * ARM.r, y: ARM.y + Math.sin(a1) * ARM.r, d: 2600, e: 'arc', a0: Math.PI / 2, a1: a1, snd: 0, bk: true };
-  b.segs.push(sg); T += 2600;                                    // the arm swings the ball up and over
+  T += seg(b, ARM.x, ARM.y + ARM.r, 300, 'in', 0.5, 1);          // rolls into the arm's cup at the end of the trough
+  var r = RAILS.min, tx = r.hx - r.ux * 8, ty = r.hy - r.uy * 8 - R - 1;
+  var a1 = Math.atan2(ty - 14 - ARM.y, tx - ARM.x); if (a1 > Math.PI / 2) a1 -= 2 * Math.PI;
+  b.segs.push({ x: ARM.x + Math.cos(a1) * ARM.r, y: ARM.y + Math.sin(a1) * ARM.r, d: 2600, e: 'arc', a0: Math.PI / 2, a1: a1, snd: 0, bk: true }); T += 2600;
   var cx = tx, cy = ty;
-  T += seg(b, cx, cy, 220, 'para', 0.6);                         // tipped out onto the MIN rail
+  T += seg(b, cx, cy, 200, 'para', 0.6);                         // dropped at the right end of the MIN rail
   function goRail(key) {
     var r = RAILS[key], list = C[key], cap = key === 'min' ? 4 : 11, off = key === 'hour' ? 1 : 0;
-    if (key !== 'min') { var hx = r.hx - r.ux * 6, hy = r.hy - r.uy * 6 - R - 1; T += seg(b, hx, hy, fallT(Math.abs(hy - cy) + 4), 'para', 0.7); cx = hx; cy = hy; }
-    p = slotPos(r, list.length + off);
+    if (key !== 'min') { T += wait(b, 260, 1); var hx = r.hx - r.ux * 8, hy = r.hy - r.uy * 8 - R - 1; T += seg(b, hx, hy, fallT(Math.abs(hy - cy) + 4), 'para', 0.8, 1); cx = hx; cy = hy; }
+    p = rot(r, slotPos(r, list.length + off), 0);
     T += seg(b, p.x, p.y, rollT(dist(cx, cy, p.x, p.y)), 'in');
     if (list.length < cap) { T += railBounce(b, p.x, p.y, r, 0.9); list.push(b); return; }
+    // full: the trigger ball's torque beats the counterweight; the right end drops
     var dumped = list.splice(0, list.length);
-    seg(b, p.x, p.y, 1, 'lin', 1);
+    seg(b, p.x, p.y, 1, 'lin', 1); T += 1;
     dump(dumped, key, T);
-    if (key === 'hour') { T += wait(b, 300); dropOff(b, r, 'hour', p); res.push(b); return; }
-    var A = 0.045 * (r.ux > 0 ? -1 : 1), pr = rot(r, p, A);
-    T += seg(b, pr.x, pr.y, 200, 'in');
-    var ex = r.lx - r.ux * 2, ey = r.ly - r.uy * 2 - R - 1;
-    T += seg(b, ex, ey, rollT(dist(pr.x, pr.y, ex, ey)) * 0.7, 'in');
-    cx = ex; cy = ey;
-    if (key === 'five') {     // drops into the rear return chute, runs back to the right, onto the hour rail
-      var c0y = CHUTE.y0 - R - 1, c1y = CHUTE.y1 - R - 1;
-      T += seg(b, CHUTE.x0, c0y, fallT(c0y - cy), 'para', 0.6, 1);
-      T += seg(b, CHUTE.x1, c1y, rollT(dist(CHUTE.x0, c0y, CHUTE.x1, c1y)) * 0.8, 'in', 0, 1);
-      cx = CHUTE.x1; cy = c1y;
-    }
+    var pr = rot(r, p, r.A);
+    T += seg(b, pr.x, pr.y, 130, 'in');
+    T += runOff(b, r, pr, key === 'hour');
+    var e = rot(r, endPos(r), r.A); cx = e.x; cy = e.y;
+    if (key === 'hour') { fallToTray(b, cx, cy); res.push(b); return; }
     goRail(key === 'min' ? 'five' : 'hour');
   }
   goRail('min');
@@ -144,6 +143,18 @@ function ease(e, t) {
   if (e === 'out') return 1 - (1 - t) * (1 - t);
   return t;
 }
+// ---- lever statics: balls' torque about the left pivot vs the counterweight, as a damped spring ----
+var SAGMAX = 0.02, KS = 0.00005, DS = 0.0045;
+function sagTarget(key) {
+  var r = RAILS[key], list = C[key], cap = key === 'min' ? 4 : 11, off = key === 'hour' ? 1 : 0, tq = 0, n = list.length + off;
+  for (var i = 0; i < n; i++) { var d = R + 6 + r.off0 + i * SP; tq += (d - 26) / r.len; }
+  return SAGMAX * tq / ((cap + off) * 0.6);
+}
+function updateLevers(dt) {
+  for (var k in RAILS) { var r = RAILS[k], tgt = (now - r.tip > 0 && now - r.tip < r.hold) ? 0 : sagTarget(k), left = dt;
+    if (r.sag === undefined) { r.sag = tgt; r.sv = 0; }
+    while (left > 0) { var h = Math.min(8, left); left -= h; r.sv += ((tgt - r.sag) * KS - r.sv * DS) * h; r.sag += r.sv * h; } }
+}
 function update(dt) {
   updateLevers(dt);
   var all = balls.concat([fixedBall]);
@@ -152,7 +163,8 @@ function update(dt) {
     while (b.segs.length) {
       var s = b.segs[0], el = now - b.t0;
       if (el >= s.d) {
-        if (s.x !== null) { b.sx = s.x; b.sy = s.y; } b.x = b.sx; b.y = b.sy; b.t0 += s.d; b.segs.shift();
+        if (s.x !== null) { b.sx = s.x; b.sy = s.y; } else if (s.fol) { b.sx = b.x; b.sy = b.y; }
+        b.x = b.sx; b.y = b.sy; b.t0 += s.d; b.segs.shift();
         if (s.snd && soundHook && el - s.d < 200) soundHook(s.snd);
         continue;
       }
@@ -176,18 +188,6 @@ function update(dt) {
     }
     b.rot += (b.x - ox) / R;
   }
-}
-// ---- lever statics: balls' torque vs counterweight, as a damped spring (small sag until the trigger ball tips it) ----
-var SAGMAX = 0.022, KS = 0.00005, DS = 0.0045;
-function sagTarget(key) {
-  var r = RAILS[key], list = C[key], cap = key === 'min' ? 4 : 11, off = key === 'hour' ? 1 : 0, tq = 0, n = list.length + off;
-  for (var i = 0; i < n; i++) { var d = R + 4 + i * SP; tq += (r.len - d) / r.len; }   // moment arm from the pivot (high end)
-  return (r.ux > 0 ? -1 : 1) * SAGMAX * tq / (cap + off);
-}
-function updateLevers(dt) {
-  for (var k in RAILS) { var r = RAILS[k], tgt = (now - r.tip > 0 && now - r.tip < r.hold) ? 0 : sagTarget(k), left = dt;
-    if (r.sag === undefined) { r.sag = tgt; r.sv = 0; }
-    while (left > 0) { var h = Math.min(8, left); left -= h; r.sv += ((tgt - r.sag) * KS - r.sv * DS) * h; r.sag += r.sv * h; } }
 }
 function readTime() { return { h: C.hour.length + 1, m: C.five.length * 5 + C.min.length }; }
 if (typeof module !== 'undefined') { module.exports = { setup: setup, tick: tick, readTime: readTime, C: function () { return C; }, res: function () { return res; }, balls: function () { return balls; }, update: update, setNow: function (t) { now = t; } }; }
@@ -281,10 +281,6 @@ if (typeof document !== 'undefined') (function () {
     g.globalAlpha = 1;
     
            // dial window recess
-    // rear return chute (5-min -> hours)
-    g.save(); g.globalAlpha = .55; var ca = Math.atan2(CHUTE.y1 - CHUTE.y0, CHUTE.x1 - CHUTE.x0); g.translate(CHUTE.x0 - 8, CHUTE.y0); g.rotate(ca);
-    var Lc = dist(CHUTE.x0, CHUTE.y0, CHUTE.x1, CHUTE.y1) + 16; g.fillStyle = '#0d0d0f'; g.fillRect(0, 0, Lc, 9); g.fillStyle = 'rgba(255,255,255,.1)'; g.fillRect(0, 0, Lc, 1);
-    g.fillStyle = '#18181b'; g.fillRect(0, -10, Lc, 3); g.restore();
     // V-shaped reservoir trough (behind the front frame)
     g.fillStyle = '#0b0b0d'; g.beginPath(); g.moveTo(TRAY.x0, trayY(TRAY.x0) + R - 2); g.lineTo(TRAY.cx, TRAY.cy); g.lineTo(TRAY.x1, trayY(TRAY.x1) + R - 2); g.lineTo(TRAY.x1, TRAY.cy + 12); g.lineTo(TRAY.x0, TRAY.cy + 12); g.fill();
     g.strokeStyle = 'rgba(255,255,255,.14)'; g.lineWidth = 1; g.beginPath(); g.moveTo(TRAY.x0, trayY(TRAY.x0) + R); g.lineTo(TRAY.cx, TRAY.cy + 1); g.lineTo(TRAY.x1, trayY(TRAY.x1) + R); g.stroke();
@@ -325,37 +321,39 @@ if (typeof document !== 'undefined') (function () {
   }
   function railLabels(key) {
     var r = RAILS[key], n = key === 'min' ? 4 : (key === 'five' ? 11 : 12), a = tipAngle(r, now);
-    var ta = Math.atan2(r.hy - r.ly, r.hx - r.lx); if (Math.cos(ta) < 0) ta += Math.PI; ta += a;
-    cx.fillStyle = 'rgba(244,242,236,.92)'; cx.font = 'bold 22px "Helvetica Neue",Helvetica,Arial,sans-serif'; cx.textBaseline = 'middle'; cx.textAlign = 'center';
+    var ta = Math.atan2(r.hy - r.ly, r.hx - r.lx) + a;
+    cx.fillStyle = 'rgba(246,244,238,.95)'; cx.font = 'bold 26px "Helvetica Neue",Helvetica,Arial,sans-serif'; cx.textAlign = 'center'; cx.textBaseline = 'middle';
     for (var i = 0; i < n; i++) {
-      var t = key === 'min' ? String(i + 1) : key === 'hour' ? String(i + 1) : (i % 2 ? '-' : String(5 * (i + 1)));
-      var d = R + 4 + i * SP, p = rot(r, { x: r.lx + r.ux * d, y: r.ly + r.uy * d + 15 }, a);
+      var t = key === 'five' ? (i % 2 ? '-' : String(5 * (i + 1))) : String(i + 1);
+      var d = R + 6 + r.off0 + i * SP, p = rot(r, { x: r.lx + r.ux * d, y: r.ly + r.uy * d + 17 }, a);
       cx.save(); cx.translate(p.x, p.y); cx.rotate(ta); cx.fillText(t, 0, 0); cx.restore(); }
-    if (key !== 'hour') { var e = key === 'min' ? { x: r.hx, y: r.hy } : { x: r.lx, y: r.ly }, dir = key === 'min' ? 1 : -1;
-      var q = rot(r, { x: e.x + r.ux * dir * -0 + (key === 'min' ? -r.ux * -14 : r.ux * -0) , y: e.y + 15 }, a);
-      cx.font = 'bold 13px Helvetica,Arial,sans-serif'; cx.save(); cx.translate(q.x + (key === 'min' ? 4 : -6), q.y); cx.rotate(ta); cx.fillText('MIN', 0, 0); cx.restore(); }
+    var q = rot(r, { x: r.lx - 2, y: r.ly + 17 }, a);
+    cx.font = 'bold 12px Helvetica,Arial,sans-serif'; cx.textAlign = 'right';
+    cx.save(); cx.translate(q.x, q.y); cx.rotate(ta); cx.fillText(key === 'hour' ? 'HR.' : 'MIN.', 0, 0); cx.restore();
   }
   function drawRail(key) {
-    var r = RAILS[key], a = tipAngle(r, now), ang = Math.atan2(r.ly - r.hy, r.lx - r.hx), sg = Math.cos(ang) > 0 ? 1 : -1;
-    cx.save(); cx.translate(r.hx, r.hy); cx.rotate(ang + a);
-    var ext = 4, Lr = r.len + 10;
-    var g = cx.createLinearGradient(0, 0, 0, 30 * sg); g.addColorStop(0, '#3b3b40'); g.addColorStop(.12, '#18181b'); g.addColorStop(.9, '#0a0a0b'); g.addColorStop(1, '#000');
-    cx.fillStyle = 'rgba(0,0,0,.25)'; cx.fillRect(-ext, 30 * sg, Lr + ext, 5 * sg);
-    cx.fillStyle = g; cx.fillRect(-ext, 0, Lr + ext, 30 * sg);
-    cx.fillStyle = 'rgba(255,255,255,.28)'; cx.fillRect(-ext, 0, Lr + ext, sg * .9);
-    if (Q) { var gx = Lr * .35 + a * 1500, sh = cx.createLinearGradient(gx - 80, 0, gx + 80, 0); sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(.5, 'rgba(255,255,255,.12)'); sh.addColorStop(1, 'rgba(255,255,255,0)'); cx.fillStyle = sh; cx.fillRect(gx - 80, sg, 160, 4 * sg); }
-    cx.fillStyle = '#121214'; cx.fillRect(Lr - 5, -16 * sg, 7, 46 * sg);    // end stop at the low end
-    // short arm + counterweight block (the reason the rail holds until the trigger ball)
-    cx.fillStyle = '#141416'; cx.fillRect(-58, 8 * sg, 58, 12 * sg);
-    var cw = cx.createLinearGradient(-66, 0, -30, 0); cw.addColorStop(0, '#5d6066'); cw.addColorStop(.35, '#d9dce0'); cw.addColorStop(.6, '#8b8f96'); cw.addColorStop(1, '#3a3c40');
-    cx.fillStyle = 'rgba(0,0,0,.35)'; cx.fillRect(-64, 4 * sg, 36, 44 * sg);
-    cx.fillStyle = cw; cx.fillRect(-66, 2 * sg, 36, 42 * sg); cx.fillStyle = 'rgba(255,255,255,.5)'; cx.fillRect(-66, 2 * sg, 36, sg);
+    var r = RAILS[key], a = tipAngle(r, now), base = Math.atan2(r.hy - r.ly, r.hx - r.lx);
+    var x0 = (r.lx - r.px) * Math.cos(base) + (r.ly - r.py) * Math.sin(base), y0 = -(r.lx - r.px) * Math.sin(base) + (r.ly - r.py) * Math.cos(base);
+    cx.save(); cx.translate(r.px, r.py); cx.rotate(base + a);
+    var L0 = x0 - 6, L1 = x0 + r.len + 8;
+    var g = cx.createLinearGradient(0, y0, 0, y0 + 32); g.addColorStop(0, '#3b3b40'); g.addColorStop(.12, '#18181b'); g.addColorStop(.9, '#0a0a0b'); g.addColorStop(1, '#000');
+    cx.fillStyle = 'rgba(0,0,0,.25)'; cx.fillRect(L0, y0 + 32, L1 - L0, 5);
+    cx.fillStyle = g; cx.fillRect(L0, y0, L1 - L0, 32);
+    cx.fillStyle = 'rgba(255,255,255,.3)'; cx.fillRect(L0, y0, L1 - L0, 1);
+    if (Q) { var gx = (L1 - L0) * .4 + a * 2500, sh = cx.createLinearGradient(gx - 90, 0, gx + 90, 0); sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(.5, 'rgba(255,255,255,.14)'); sh.addColorStop(1, 'rgba(255,255,255,0)'); cx.fillStyle = sh; cx.fillRect(gx - 90, y0 + 1, 180, 5); }
+    cx.fillStyle = '#121214'; cx.fillRect(L0 - 4, y0 - 20, 8, 52);   // stop at the left end (balls rest against it)
+    if (key === 'hour') {   // hour rail: counterweight block on the short arm under the pivot
+      var cw = cx.createLinearGradient(-40, 0, -6, 0); cw.addColorStop(0, '#5d6066'); cw.addColorStop(.35, '#d9dce0'); cw.addColorStop(.6, '#8b8f96'); cw.addColorStop(1, '#3a3c40');
+      cx.fillStyle = cw; cx.fillRect(-46, 4, 34, 34); cx.fillStyle = 'rgba(255,255,255,.5)'; cx.fillRect(-46, 4, 34, 1); }
     cx.restore();
+    // black counterweight ball (MIN and 5-MIN rails), as on the Time Machine
+    if (key !== 'hour') { var cp = rot(r, { x: r.lx + r.ux * (R + 6), y: r.ly + r.uy * (R + 6) - R - 1 }, a), s2 = 2 * R + .5;
+      cx.drawImage(ballSpr, cp.x - s2 / 2, cp.y - s2 / 2, s2, s2); cx.fillStyle = 'rgba(8,8,12,.78)'; cx.beginPath(); cx.arc(cp.x, cp.y, R, 0, 7); cx.fill(); }
     // pivot pin (fulcrum)
-    var pp = { x: r.hx, y: r.hy + 14 }, pg = cx.createRadialGradient(pp.x - 3, pp.y - 3, 1, pp.x, pp.y, 10);
+    var pg = cx.createRadialGradient(r.px - 3, r.py - 3, 1, r.px, r.py, 10);
     pg.addColorStop(0, '#ffffff'); pg.addColorStop(.4, '#b9bcc2'); pg.addColorStop(1, '#2a2b2e');
-    cx.fillStyle = '#050506'; cx.beginPath(); cx.arc(pp.x, pp.y, 12, 0, 7); cx.fill();
-    cx.fillStyle = pg; cx.beginPath(); cx.arc(pp.x, pp.y, 8, 0, 7); cx.fill();
+    cx.fillStyle = '#050506'; cx.beginPath(); cx.arc(r.px, r.py, 12, 0, 7); cx.fill();
+    cx.fillStyle = pg; cx.beginPath(); cx.arc(r.px, r.py, 8, 0, 7); cx.fill();
     railLabels(key);
   }
   function surfaceBelow(b) {
