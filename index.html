@@ -6,44 +6,51 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Ball Clock">
-<meta name="theme-color" content="#0b0805">
+<meta name="theme-color" content="#070504">
 <link rel="apple-touch-icon" href="apple-touch-icon.png">
 <link rel="icon" href="apple-touch-icon.png">
 <title>Ball Clock</title>
 <style>
-html,body{margin:0;padding:0;height:100%;background:#0b0805;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:none}
+html,body{margin:0;padding:0;height:100%;background:#070504;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:none}
 canvas{display:block;position:absolute;left:0;top:0}
 #lbl{position:absolute;right:2.5vw;bottom:2vh;font:600 10vh "Helvetica Neue",Helvetica,Arial,sans-serif;color:#d9b36a;opacity:.95;display:none;letter-spacing:.05em;text-shadow:0 0 8px #000}
+#snd{position:absolute;left:1.5vw;top:1.5vh;width:44px;height:44px;opacity:.35;color:#d9b36a;font:22px/44px sans-serif;text-align:center;border-radius:22px}
 </style></head><body>
-<canvas id="c"></canvas><div id="lbl"></div>
+<canvas id="c"></canvas><div id="lbl"></div><div id="snd">&#128263;</div>
 <script>
-// ===== ENGINE (no DOM) =====
-var W = 1000, H = 700, R = 14, SP = 30, NBALLS = 30;
-function rail(lx, ly, hx, hy) { var dx = hx - lx, dy = hy - ly, L = Math.sqrt(dx * dx + dy * dy); return { lx: lx, ly: ly, hx: hx, hy: hy, ux: dx / L, uy: dy / L, len: L, tip: -1e9 }; }
-var RAILS = {
-  min: rail(200, 190, 820, 150),
-  five: rail(830, 320, 170, 280),
-  hour: rail(170, 450, 860, 410)
-};
-var DROPX = { min: 115, five: 885, hour: 115 };
-var TRAY = { x0: 100, y0: 628, x1: 885, y1: 650 };
-var LIFT = { x: 930, yb: 652, yt: 110 };
-function slotPos(r, i) { var d = R + 2 + i * SP; return { x: r.lx + r.ux * d - r.uy * -(R + 3) * 0, y: r.ly + r.uy * d - (R + 3) }; }
-function trayPos(i) { var t = (TRAY.x1 - R - 4 - i * (2 * R + 1) - TRAY.x0) / (TRAY.x1 - TRAY.x0); return { x: TRAY.x0 + t * (TRAY.x1 - TRAY.x0), y: TRAY.y0 + t * (TRAY.y1 - TRAY.y0) - R - 3 }; }
-
-var balls = [], res = [], C = { min: [], five: [], hour: [] }, fixedBall, now = 0;
-function mkBall() { return { x: 0, y: 0, segs: [], t0: 0, sx: 0, sy: 0 }; }
+// ================= ENGINE (no DOM; tested by test.js) =================
+var W = 1000, H = 700, R = 14, SP = 29, NBALLS = 30;
+var ACC = 0.0006, GRAV = 0.0026;           // px/ms^2: rolling (g sin(theta) * 5/7) and free fall
+function rail(lx, ly, hx, hy) { var dx = hx - lx, dy = hy - ly, L = Math.sqrt(dx * dx + dy * dy); return { lx: lx, ly: ly, hx: hx, hy: hy, ux: dx / L, uy: dy / L, len: L, tip: -1e9, hold: 0 }; }
+var RAILS = { min: rail(200, 190, 820, 150), five: rail(830, 320, 170, 280), hour: rail(170, 450, 860, 410) };
+var DROPX = { min: 118, five: 884, hour: 118 };
+var TRAY = { x0: 100, y0: 626, x1: 885, y1: 648 };
+var LIFT = { x: 930, yb: 650, yt: 112 };
+var balls = [], res = [], C = { min: [], five: [], hour: [] }, fixedBall, now = 0, liftBall = null, soundHook = null;
+function tipAngle(r, t) {
+  var el = t - r.tip, A = 0.075 * (r.ux > 0 ? -1 : 1);
+  if (el < 0 || el > r.hold + 2600) return 0;
+  if (el < 200) { var k = el / 200; return A * k * k; }
+  if (el < r.hold) return A;
+  var s = el - r.hold; return A * Math.exp(-s / 320) * Math.cos(s / 75);   // spring back with damped overshoot
+}
+function rot(r, p, a) { if (!a) return p; var dx = p.x - r.hx, dy = p.y - r.hy, c = Math.cos(a), s = Math.sin(a); return { x: r.hx + dx * c - dy * s, y: r.hy + dx * s + dy * c }; }
+function slotPos(r, i) { var d = R + 3 + i * SP; return { x: r.lx + r.ux * d, y: r.ly + r.uy * d - (R + 3) }; }
+function trayY(x) { return TRAY.y0 + (x - TRAY.x0) / (TRAY.x1 - TRAY.x0) * (TRAY.y1 - TRAY.y0) - R - 2; }
+function trayPos(i) { var x = TRAY.x1 - R - 4 - i * (2 * R + 0.5); return { x: x, y: trayY(x) }; }
 function restPos(b) {
   var i;
   if ((i = res.indexOf(b)) >= 0) return trayPos(i);
-  if ((i = C.min.indexOf(b)) >= 0) return slotPos(RAILS.min, i);
-  if ((i = C.five.indexOf(b)) >= 0) return slotPos(RAILS.five, i);
-  if ((i = C.hour.indexOf(b)) >= 0) return slotPos(RAILS.hour, i + 1);
-  if (b === fixedBall) return slotPos(RAILS.hour, 0);
+  if ((i = C.min.indexOf(b)) >= 0) return rot(RAILS.min, slotPos(RAILS.min, i), tipAngle(RAILS.min, now));
+  if ((i = C.five.indexOf(b)) >= 0) return rot(RAILS.five, slotPos(RAILS.five, i), tipAngle(RAILS.five, now));
+  if ((i = C.hour.indexOf(b)) >= 0) return rot(RAILS.hour, slotPos(RAILS.hour, i + 1), tipAngle(RAILS.hour, now));
+  if (b === fixedBall) return rot(RAILS.hour, slotPos(RAILS.hour, 0), tipAngle(RAILS.hour, now));
   return { x: b.x, y: b.y };
 }
+function mkBall() { return { x: 0, y: 0, vx: 0, vy: 0, rot: Math.random() * 6.28, segs: [], t0: 0, sx: 0, sy: 0 }; }
 function setup(h, m) {
-  balls = []; res = []; C = { min: [], five: [], hour: [] };
+  balls = []; res = []; C = { min: [], five: [], hour: [] }; liftBall = null;
+  for (var k in RAILS) RAILS[k].tip = -1e9;
   fixedBall = mkBall();
   for (var i = 0; i < NBALLS; i++) { var b = mkBall(); balls.push(b); res.push(b); }
   var h12 = h % 12 || 12, f = Math.floor(m / 5), mm = m % 5;
@@ -51,174 +58,327 @@ function setup(h, m) {
   for (i = 0; i < f; i++) C.five.push(res.shift());
   for (i = 0; i < h12 - 1; i++) C.hour.push(res.shift());
   var all = balls.concat([fixedBall]);
-  for (i = 0; i < all.length; i++) { var p = restPos(all[i]); all[i].x = p.x; all[i].y = p.y; all[i].segs = []; }
+  for (i = 0; i < all.length; i++) { var p = restPos(all[i]); all[i].x = p.x; all[i].y = p.y; all[i].vx = all[i].vy = 0; all[i].segs = []; }
 }
-// segment helpers: each ball gets a list of {x,y,d,e} relative to its own clock
-function seg(b, x, y, d, e) { b.segs.push({ x: x, y: y, d: d, e: e || 'lin' }); }
-function wait(b, d) { seg(b, null, null, d); }
-function rollDur(x0, y0, x1, y1) { var dx = x1 - x0, dy = y1 - y0; return Math.max(250, Math.sqrt(dx * dx + dy * dy) * 1.6); }
-function dump(list, railKey, T) {
-  var r = RAILS[railKey];
+function seg(b, x, y, d, e, snd) { b.segs.push({ x: x, y: y, d: d, e: e || 'lin', snd: snd || 0 }); return d; }
+function wait(b, d) { return seg(b, null, null, d); }
+function dist(x0, y0, x1, y1) { var dx = x1 - x0, dy = y1 - y0; return Math.sqrt(dx * dx + dy * dy); }
+function rollT(L) { return Math.max(120, Math.sqrt(2 * L / ACC)); }            // from rest, constant acceleration
+function fallT(h) { return Math.max(60, Math.sqrt(2 * Math.max(1, h) / GRAV)); }
+// rebound against a stop or ball: back up the rail a little, roll back, settle
+function railBounce(b, x, y, r, dirSign, vol) {
+  var ax = r.ux * dirSign, ay = r.uy * dirSign, T = 0;
+  T += seg(b, x + ax * 4, y + ay * 4, 110, 'out'); T += seg(b, x, y, 110, 'in', vol * 0.4);
+  T += seg(b, x + ax * 1.2, y + ay * 1.2, 60, 'out'); T += seg(b, x, y, 60, 'in');
+  return T;
+}
+function landBounce(b, x, y, vol) {
+  var T = 0;
+  T += seg(b, x - 3, y - 10, 150, 'out'); T += seg(b, x - 6, y, 150, 'in', vol * 0.5);
+  T += seg(b, x - 8, y - 3, 80, 'out'); T += seg(b, x - 9, y, 80, 'in', vol * 0.2);
+  return T;
+}
+function dropOff(b, r, key, from, T0) {
+  // roll from rest down to the low end, launch off the end, fall in a parabola into the tray and bounce
+  var ex = r.lx - r.ux * 4, ey = r.ly - r.uy * 4 - R - 3, T = 0;
+  T += seg(b, ex, ey, rollT(dist(from.x, from.y, ex, ey) + 8), 'in');
+  var ty = trayY(DROPX[key]);
+  T += seg(b, DROPX[key], ty, fallT(ty - ey) * 1.05, 'para', 1);
+  T += landBounce(b, DROPX[key], ty, 0.8);
+  return T;
+}
+function dump(list, key, T) {
+  var r = RAILS[key], maxT = 0;
   r.tip = now + T;
-  for (var k = list.length - 1; k >= 0; k--) {
-    var b = list[k], p = slotPos(r, railKey === 'hour' ? k + 1 : k), d = (list.length - 1 - k);
+  for (var k = 0; k < list.length; k++) {
+    var b = list[k], p = slotPos(r, key === 'hour' ? k + 1 : k), tt;
     b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y;
-    wait(b, T + 120 + k * 35);
-    var ex = r.lx - r.ux * 6, ey = r.ly - r.uy * 6 - R - 3;
-    seg(b, ex, ey, rollDur(p.x, p.y, ex, ey) * 0.5, 'in');
-    seg(b, DROPX[railKey], ey + 10, 120, 'lin');
-    var ty = TRAY.y0 + (DROPX[railKey] - TRAY.x0) / (TRAY.x1 - TRAY.x0) * (TRAY.y1 - TRAY.y0) - R - 3;
-    seg(b, DROPX[railKey], ty, Math.sqrt(Math.max(1, ty - ey)) * 22, 'fall');
+    tt = wait(b, T + 160 + k * 40);
+    var A = 0.075 * (r.ux > 0 ? -1 : 1); var pr = rot(r, p, A);
+    tt += seg(b, pr.x, pr.y, 140, 'in');
+    tt += dropOff(b, r, key, pr, 0);
+    maxT = Math.max(maxT, T + 160 + k * 40 + 400);
     res.push(b);
   }
+  r.hold = Math.max(500, maxT - T);
+  return maxT;
 }
 function tick() {
-  var b = res.shift(), T = 0, p, q;
-  b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y;
-  seg(b, LIFT.x, LIFT.yb, 400, 'io'); T += 400;
-  seg(b, LIFT.x, LIFT.yt, 2600, 'io'); T += 2600;
-  var r = RAILS.min;
-  seg(b, r.hx + 8, r.hy - R - 3, 300, 'io'); T += 300;
-  var cx = r.hx + 8, cy = r.hy - R - 3;
+  var b = res.shift(), T = 0, p;
+  b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y; liftBall = b;
+  T += seg(b, LIFT.x, LIFT.yb, 380, 'in', 0.5);         // rolls into the screw's cup
+  T += seg(b, LIFT.x, LIFT.yt, 2600, 'lin');            // screw lift
+  b.liftEnd = now + T;
+  var r = RAILS.min, cx = r.hx + 6, cy = r.hy - R - 3;
+  T += seg(b, cx, cy, 260, 'para', 0.6);                // tossed onto the minute rail
   function goRail(key) {
     var r = RAILS[key], list = C[key], cap = key === 'min' ? 4 : 11, off = key === 'hour' ? 1 : 0;
-    if (key !== 'min') { // drop onto high end of next rail
-      var hx = r.hx - r.ux * 4, hy = r.hy - r.uy * 4 - R - 3;
-      seg(b, hx, hy, 380, 'fall'); T += 380; cx = hx; cy = hy;
-    }
-    if (list.length < cap) {
-      p = slotPos(r, list.length + off);
-      var d = rollDur(cx, cy, p.x, p.y); seg(b, p.x, p.y, d, 'roll'); T += d; list.push(b); return;
-    }
-    // full: ball rolls to the trip slot, rail tips, contents dump
+    if (key !== 'min') { var hx = r.hx - r.ux * 6, hy = r.hy - r.uy * 6 - R - 3; T += seg(b, hx, hy, fallT(hy - cy), 'para', 0.7); cx = hx; cy = hy; }
     p = slotPos(r, list.length + off);
-    var d2 = rollDur(cx, cy, p.x, p.y); seg(b, p.x, p.y, d2, 'roll'); T += d2;
+    T += seg(b, p.x, p.y, rollT(dist(cx, cy, p.x, p.y)), 'in');
+    if (list.length < cap) { T += railBounce(b, p.x, p.y, r, 1, 0.9); list.push(b); return; }
+    // full: the extra ball trips the rail; it tips, contents dump, rail springs back
     var dumped = list.splice(0, list.length);
+    seg(b, p.x, p.y, 1, 'lin', 1);
     dump(dumped, key, T);
-    if (key === 'hour') { // fixed ball + this one = 12 -> 1 o'clock; carried ball returns too
-      var ex = r.lx - r.ux * 6, ey = r.ly - r.uy * 6 - R - 3;
-      wait(b, 140); seg(b, ex, ey, rollDur(p.x, p.y, ex, ey) * 0.5, 'in'); seg(b, DROPX.hour, ey + 10, 120);
-      seg(b, DROPX.hour, TRAY.y0 + 2 - R, 400, 'fall'); res.push(b); return;
-    }
-    wait(b, 200); T += 200; cx = p.x; cy = p.y;
+    if (key === 'hour') { T += wait(b, 300); dropOff(b, r, 'hour', p, T); res.push(b); return; }
+    var A = 0.075 * (r.ux > 0 ? -1 : 1), pr = rot(r, p, A);
+    T += seg(b, pr.x, pr.y, 200, 'in');
+    var ex = r.lx - r.ux * 2, ey = r.ly - r.uy * 2 - R - 3;   // carried ball runs off the low end onto the next rail
+    T += seg(b, ex, ey, rollT(dist(pr.x, pr.y, ex, ey)) * 0.7, 'in');
+    cx = ex; cy = ey;
     goRail(key === 'min' ? 'five' : 'hour');
   }
   goRail('min');
 }
 function ease(e, t) {
   if (e === 'io') return t < .5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
-  if (e === 'in' || e === 'fall') return t * t;
-  if (e === 'roll') return t * (0.6 + 0.4 * t) ; // gentle acceleration
+  if (e === 'in') return t * t;          // constant acceleration from rest
+  if (e === 'out') return 1 - (1 - t) * (1 - t);
   return t;
 }
 function update(dt) {
   var all = balls.concat([fixedBall]);
   for (var i = 0; i < all.length; i++) {
-    var b = all[i];
+    var b = all[i], ox = b.x, oy = b.y;
     while (b.segs.length) {
       var s = b.segs[0], el = now - b.t0;
-      if (el >= s.d) { if (s.x !== null) { b.sx = s.x; b.sy = s.y; } b.x = b.sx; b.y = b.sy; b.t0 += s.d; b.segs.shift(); continue; }
-      if (s.x !== null) { var k = ease(s.e, el / s.d); b.x = b.sx + (s.x - b.sx) * k; b.y = b.sy + (s.y - b.sy) * k; }
+      if (el >= s.d) {
+        if (s.x !== null) { b.sx = s.x; b.sy = s.y; } b.x = b.sx; b.y = b.sy; b.t0 += s.d; b.segs.shift();
+        if (s.snd && soundHook && el - s.d < 200) soundHook(s.snd);
+        continue;
+      }
+      if (s.x !== null) {
+        var k = el / s.d;
+        if (s.e === 'para') { b.x = b.sx + (s.x - b.sx) * k; b.y = b.sy + (s.y - b.sy) * k * k; }
+        else { var q = ease(s.e, k); b.x = b.sx + (s.x - b.sx) * q; b.y = b.sy + (s.y - b.sy) * q; }
+      }
       break;
     }
-    if (!b.segs.length) { var p = restPos(b), a = Math.min(1, dt / 180); b.x += (p.x - b.x) * a; b.y += (p.y - b.y) * a; }
+    if (!b.segs.length) {     // idle: damped spring toward rest (gives the reservoir its jostle)
+      var p = restPos(b), left = dt;
+      if (b === liftBall) liftBall = null;
+      while (left > 0) { var h = Math.min(8, left); left -= h;
+        b.vx += ((p.x - b.x) * 0.00011 - b.vx * 0.016) * h; b.vy += ((p.y - b.y) * 0.00011 - b.vy * 0.016) * h;
+        b.x += b.vx * h; b.y += b.vy * h; }
+    }
+    b.rot += (b.x - ox) / R;   // true rolling rotation
   }
 }
 function readTime() { return { h: C.hour.length + 1, m: C.five.length * 5 + C.min.length }; }
 if (typeof module !== 'undefined') { module.exports = { setup: setup, tick: tick, readTime: readTime, C: function () { return C; }, res: function () { return res; }, balls: function () { return balls; }, update: update, setNow: function (t) { now = t; } }; }
 
-// ===== RENDER (DOM) =====
+// ================= RENDER (2.5D canvas, baked PBR-style sprites) =================
 if (typeof document !== 'undefined') (function () {
-  var cv = document.getElementById('c'), cx = cv.getContext('2d'), lbl = document.getElementById('lbl');
-  var sc = 1, ox = 0, oy = 0, dpr = 1, ballSprite, shown = null, showLbl = false;
+  var cv = document.getElementById('c'), cx = cv.getContext('2d'), lbl = document.getElementById('lbl'), sndBtn = document.getElementById('snd');
+  var Q = /[?&]q=low/.test(location.search) ? 0 : 1;          // quality: 1 high, 0 low (auto fallback)
+  var sc = 1, ox = 0, oy = 0, dpr = 1, ballSpr, shadowSpr, staticL, vignL, woodH, woodV, shown = null;
   var showLbl = true; try { showLbl = localStorage.getItem('bc_lbl') !== '0'; } catch (e) {}
+  var sndOn = false; try { sndOn = localStorage.getItem('bc_snd') === '1'; } catch (e) {}
+  var m = /[?&]t=(\d+):(\d+)(?::(\d+))?/.exec(location.search), tOff = 0;
+  if (m) { var d0 = new Date(); d0.setHours(+m[1], +m[2], +(m[3] || 0), 0); tOff = d0.getTime() - Date.now(); }
+  function clock() { return new Date(Date.now() + tOff); }
+
+  // ---------- procedural textures ----------
+  function noise2(w, h, cell) { var g = [], gw = Math.ceil(w / cell) + 2, gh = Math.ceil(h / cell) + 2, i;
+    for (i = 0; i < gw * gh; i++) g.push(Math.random());
+    return function (x, y) { var fx = x / cell, fy = y / cell, ix = Math.floor(fx), iy = Math.floor(fy), tx = fx - ix, ty = fy - iy;
+      tx = tx * tx * (3 - 2 * tx); ty = ty * ty * (3 - 2 * ty);
+      var a = g[iy * gw + ix], b = g[iy * gw + ix + 1], c = g[(iy + 1) * gw + ix], d = g[(iy + 1) * gw + ix + 1];
+      return a + (b - a) * tx + (c - a) * ty + (a - b - c + d) * tx * ty; }; }
+  function makeWood(w, h) {   // walnut: long grain along x
+    var c = document.createElement('canvas'); c.width = w; c.height = h; var g = c.getContext('2d'), id = g.createImageData(w, h), D = id.data;
+    var n1 = noise2(w, h, 60), n2 = noise2(w, h, 9), n3 = noise2(w, h, 2.5);
+    for (var y = 0; y < h; y++) for (var x = 0; x < w; x++) {
+      var v = Math.sin((y + n1(x, y) * 38 + x * 0.015) * 0.32) * 0.5 + 0.5;
+      v = Math.pow(v, 2.2) * 0.55 + n2(x, y) * 0.25 + n3(x * 0.3, y * 3) * 0.2;
+      var o = (y * w + x) * 4; D[o] = 52 + v * 70; D[o + 1] = 30 + v * 42; D[o + 2] = 17 + v * 24; D[o + 3] = 255; }
+    g.putImageData(id, 0, 0); return c; }
+  function makeBall(px) {      // chrome sphere lit by a procedural studio environment (reflection-mapped)
+    var S = px * 2, c = document.createElement('canvas'); c.width = c.height = S; var g = c.getContext('2d'), id = g.createImageData(S, S), D = id.data, r = S / 2 - 1;
+    for (var y = 0; y < S; y++) for (var x = 0; x < S; x++) {
+      var nx = (x + .5 - S / 2) / r, ny = (y + .5 - S / 2) / r, d2 = nx * nx + ny * ny, o = (y * S + x) * 4;
+      if (d2 > 1) { D[o + 3] = 0; continue; }
+      var nz = Math.sqrt(1 - d2), rx = 2 * nz * nx, ry = 2 * nz * ny, rz = 2 * nz * nz - 1, R0, G0, B0;
+      if (ry > 0.08) {            // floor / walnut base reflection
+        var f = Math.min(1, (ry - 0.08) * 1.5); R0 = 150 - f * 70; G0 = 110 - f * 55; B0 = 80 - f * 45;
+      } else {                    // dim room + horizon glow
+        var hz = Math.exp(-Math.abs(ry - 0.08) * 9); R0 = 70 + hz * 150; G0 = 70 + hz * 140; B0 = 74 + hz * 130;
+        if (rz > 0.5) { R0 += 20; G0 += 16; B0 += 12; }
+      }
+      // key softbox (top-left, front) and strip light (right)
+      if (ry < -0.35 && ry > -0.95 && rx > -0.75 && rx < -0.05 && rz > -0.2) { var e = Math.min(1, Math.min(-0.35 - ry, ry + 0.95, rx + 0.75, -0.05 - rx) * 12); R0 += (255 - R0) * e; G0 += (252 - G0) * e; B0 += (245 - B0) * e; }
+      if (rx > 0.72 && ry > -0.55 && ry < 0.05) { var e2 = Math.min(1, Math.min(rx - 0.72, ry + 0.55, 0.05 - ry) * 10) * 0.75; R0 += (240 - R0) * e2; G0 += (235 - G0) * e2; B0 += (225 - B0) * e2; }
+      var fres = 0.72 + 0.28 * Math.pow(nz, 0.5);   // chrome ~ 0.75 F0, slightly darker at grazing rim from edge occlusion
+      var edge = Math.min(1, (1 - Math.sqrt(d2)) * r * 0.9);
+      D[o] = Math.min(255, R0 * fres); D[o + 1] = Math.min(255, G0 * fres); D[o + 2] = Math.min(255, B0 * fres * 1.02); D[o + 3] = 255 * edge; }
+    g.putImageData(id, 0, 0);
+    // tight specular hotspot
+    var hs = g.createRadialGradient(S * .36, S * .3, 0, S * .36, S * .3, S * .12); hs.addColorStop(0, 'rgba(255,255,255,.95)'); hs.addColorStop(1, 'rgba(255,255,255,0)');
+    g.globalCompositeOperation = 'source-atop'; g.fillStyle = hs; g.fillRect(0, 0, S, S);
+    var out = document.createElement('canvas'); out.width = out.height = px; out.getContext('2d').drawImage(c, 0, 0, px, px); return out; }
+  function makeShadow(px) { var c = document.createElement('canvas'); c.width = px * 2; c.height = px; var g = c.getContext('2d');
+    var gr = g.createRadialGradient(px, px / 2, 0, px, px / 2, px * .9); gr.addColorStop(0, 'rgba(0,0,0,.75)'); gr.addColorStop(.35, 'rgba(0,0,0,.35)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.save(); g.scale(1, .5); g.translate(0, px / 2); g.fillStyle = gr; g.fillRect(0, -px / 2, px * 2, px * 2); g.restore(); return c; }
+
+  function L(c) { return c.getContext('2d'); }
+  function newLayer() { var c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; var g = L(c); g.setTransform(sc, 0, 0, sc, ox, oy); return c; }
+  function woodRect(g, x, y, w, h, vertical) {
+    g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
+    if (vertical) { g.translate(x, y); g.rotate(Math.PI / 2); g.drawImage(woodH, (x * 3) % 200, 0, h, woodH.height * 0.4, 0, -w, h, w); }
+    else g.drawImage(woodH, (y * 7) % 300, (x * 0.1) % 50, w, Math.min(h * 1.5, woodH.height - 60), x, y, w, h);
+    // varnish: soft top highlight and bottom falloff
+    var lg = vertical ? g.createLinearGradient(x, 0, x + w, 0) : g.createLinearGradient(0, y, 0, y + h);
+    lg.addColorStop(0, 'rgba(255,230,190,.28)'); lg.addColorStop(.15, 'rgba(255,230,190,.06)'); lg.addColorStop(.7, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(0,0,0,.45)');
+    g.fillStyle = lg; g.fillRect(x, y, w, h); g.restore(); }
+  function buildStatic() {
+    staticL = newLayer(); var g = L(staticL);
+    var bg = g.createRadialGradient(470, 260, 40, 500, 330, 760); bg.addColorStop(0, '#2c2119'); bg.addColorStop(.5, '#16100b'); bg.addColorStop(1, '#060403');
+    g.fillStyle = bg; g.fillRect(-1000, -600, 3000, 1900);
+    // soft floor reflection band
+    var fl = g.createLinearGradient(0, 690, 0, 760); fl.addColorStop(0, 'rgba(60,40,25,.6)'); fl.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = fl; g.fillRect(-500, 690, 2000, 80);
+    // posts and shadow on wall
+    g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(96, 128, 18, 540); g.fillRect(968, 88, 20, 580);
+    woodRect(g, 82, 118, 18, 556, true); woodRect(g, 950, 76, 22, 598, true);
+    // lift frame blocks
+    woodRect(g, LIFT.x - 34, LIFT.yt - 44, 68, 18, false); woodRect(g, LIFT.x - 34, LIFT.yb + 16, 68, 22, false);
+    // rail hangers (brass rods from posts)
+    function rod(x0, y0, x1, y1) { g.strokeStyle = '#6d5220'; g.lineWidth = 3; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); g.strokeStyle = 'rgba(255,230,160,.5)'; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, y0 - 1); g.lineTo(x1, y1 - 1); g.stroke(); }
+    rod(950, RAILS.min.hy, RAILS.min.hx, RAILS.min.hy); rod(100, RAILS.five.hy, RAILS.five.hx, RAILS.five.hy); rod(950, RAILS.hour.hy, RAILS.hour.hx, RAILS.hour.hy);
+    // engraved brass plaques
+    function plaque(t, x, y) { g.font = '600 13px Georgia,serif'; var w = g.measureText(t).width + 18;
+      var pg = g.createLinearGradient(0, y - 12, 0, y + 6); pg.addColorStop(0, '#d8b660'); pg.addColorStop(.5, '#a07a2c'); pg.addColorStop(1, '#6a4e18');
+      g.fillStyle = 'rgba(0,0,0,.5)'; g.fillRect(x - w / 2 + 2, y - 12, w, 19); g.fillStyle = pg; g.fillRect(x - w / 2, y - 14, w, 19);
+      g.fillStyle = 'rgba(40,25,5,.85)'; g.textAlign = 'center'; g.fillText(t, x, y); g.fillStyle = 'rgba(255,240,190,.35)'; g.fillText(t, x, y + 1); }
+    plaque('MINUTES', 560, 112); plaque('FIVE MINUTES', 480, 248); plaque('HOURS', 520, 378);
+    // reservoir tray: walnut channel with lip
+    g.fillStyle = 'rgba(0,0,0,.55)'; g.beginPath(); g.moveTo(TRAY.x0, TRAY.y0 + 10); g.lineTo(TRAY.x1 + 12, TRAY.y1 + 10); g.lineTo(TRAY.x1 + 12, TRAY.y1 + 34); g.lineTo(TRAY.x0, TRAY.y0 + 34); g.fill();
+    g.save(); g.beginPath(); g.moveTo(TRAY.x0, TRAY.y0); g.lineTo(TRAY.x1 + 12, TRAY.y1); g.lineTo(TRAY.x1 + 12, TRAY.y1 + 20); g.lineTo(TRAY.x0, TRAY.y0 + 20); g.clip();
+    g.drawImage(woodH, 0, 40, 800, 30, TRAY.x0, TRAY.y0, 800, 42); var tg = g.createLinearGradient(0, TRAY.y0, 0, TRAY.y1 + 20); tg.addColorStop(0, 'rgba(255,225,180,.35)'); tg.addColorStop(.2, 'rgba(0,0,0,0)'); tg.addColorStop(1, 'rgba(0,0,0,.5)'); g.fillStyle = tg; g.fillRect(0, 0, 1000, 700); g.restore();
+    woodRect(g, TRAY.x0 - 10, TRAY.y0 - 26, 12, 46, true);
+    // base slab
+    g.fillStyle = 'rgba(0,0,0,.7)'; g.fillRect(50, 690, 950, 14);
+    woodRect(g, 48, 668, 944, 24, false);
+    g.fillStyle = 'rgba(255,225,180,.35)'; g.fillRect(48, 668, 944, 1.5);
+    // vignette (separate layer, drawn on top)
+    vignL = newLayer(); var v = L(vignL); v.setTransform(1, 0, 0, 1, 0, 0);
+    var vg = v.createRadialGradient(cv.width / 2, cv.height * .45, Math.min(cv.width, cv.height) * .35, cv.width / 2, cv.height / 2, Math.max(cv.width, cv.height) * .75);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.6)'); v.fillStyle = vg; v.fillRect(0, 0, cv.width, cv.height);
+  }
   function resize() {
-    dpr = Math.min(window.devicePixelRatio || 1, 2);
+    dpr = Q ? Math.min(window.devicePixelRatio || 1, 2) : 1;
     var w = window.innerWidth, h = window.innerHeight;
-    cv.width = w * dpr; cv.height = h * dpr; cv.style.width = w + 'px'; cv.style.height = h + 'px';
-    sc = Math.min(w / W, h / H) * dpr; ox = (w * dpr - W * sc) / 2; oy = (h * dpr - H * sc) / 2;
-    makeSprite();
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); cv.style.width = w + 'px'; cv.style.height = h + 'px';
+    sc = Math.min(w / W, h / H) * dpr; ox = (cv.width - W * sc) / 2; oy = (cv.height - H * sc) / 2;
+    if (!woodH) woodH = makeWood(1100, 240);
+    ballSpr = makeBall(Math.ceil(2 * R * sc)); shadowSpr = makeShadow(64);
+    buildStatic();
   }
-  function makeSprite() {
-    var s = Math.ceil((R * 2 + 4) * sc); ballSprite = document.createElement('canvas'); ballSprite.width = ballSprite.height = s;
-    var g = ballSprite.getContext('2d'), c = s / 2, r = R * sc;
-    var gr = g.createRadialGradient(c - r * .4, c - r * .45, r * .05, c, c, r);
-    gr.addColorStop(0, '#ffffff'); gr.addColorStop(.18, '#e8ecef'); gr.addColorStop(.5, '#8c959c'); gr.addColorStop(.85, '#3a4046'); gr.addColorStop(1, '#1b1e21');
-    g.fillStyle = gr; g.beginPath(); g.arc(c, c, r, 0, 7); g.fill();
-    var g2 = g.createRadialGradient(c + r * .3, c + r * .5, 0, c + r * .3, c + r * .5, r * .5);
-    g2.addColorStop(0, 'rgba(230,190,120,.35)'); g2.addColorStop(1, 'rgba(230,190,120,0)'); g.fillStyle = g2; g.fill();
-  }
-  function woodGrad(x0, y0, x1, y1) { var g = cx.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, '#8a5a2b'); g.addColorStop(.5, '#b07a3e'); g.addColorStop(1, '#6b4220'); return g; }
-  function brass(x0, y0, x1, y1) { var g = cx.createLinearGradient(x0, y0, x1, y1); g.addColorStop(0, '#f6dc8f'); g.addColorStop(.45, '#c9a046'); g.addColorStop(1, '#7a5a1c'); return g; }
-  function drawRail(r, now) {
-    var el = now - r.tip, ang = 0;
-    if (el > 0 && el < 900) ang = -Math.sin(el / 900 * Math.PI) * 0.06 * (r.ux > 0 ? 1 : -1);
-    cx.save(); cx.translate(r.hx, r.hy); cx.rotate(ang); cx.translate(-r.hx, -r.hy);
-    cx.lineCap = 'round';
-    cx.strokeStyle = 'rgba(0,0,0,.5)'; cx.lineWidth = 9; cx.beginPath(); cx.moveTo(r.lx, r.ly + 4); cx.lineTo(r.hx, r.hy + 4); cx.stroke();
-    cx.strokeStyle = brass(0, r.ly - 4, 0, r.ly + 4); cx.lineWidth = 6; cx.beginPath(); cx.moveTo(r.lx, r.ly); cx.lineTo(r.hx, r.hy); cx.stroke();
-    cx.strokeStyle = 'rgba(255,240,200,.6)'; cx.lineWidth = 1.2; cx.beginPath(); cx.moveTo(r.lx, r.ly - 2); cx.lineTo(r.hx, r.hy - 2); cx.stroke();
-    // end stop at low end
-    cx.fillStyle = brass(r.lx - 5, 0, r.lx + 5, 0); cx.fillRect(r.lx - 3, r.ly - 18, 6, 21);
+  // ---------- dynamic parts ----------
+  function brassGrad(y0, y1) { var g = cx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, '#5a4214'); g.addColorStop(.25, '#f7e3a0'); g.addColorStop(.45, '#c99d40'); g.addColorStop(.8, '#7d5c1e'); g.addColorStop(1, '#3a2a0a'); return g; }
+  function drawRail(r, t) {
+    var a = tipAngle(r, t), ang = Math.atan2(r.ly - r.hy, r.lx - r.hx);
+    cx.save(); cx.translate(r.hx, r.hy); cx.rotate(ang + a);
+    var Lr = r.len + 8;
+    // back wire (farther, darker), front wire
+    cx.fillStyle = 'rgba(0,0,0,.4)'; cx.fillRect(0, -1, Lr, 7);
+    cx.globalAlpha = .55; cx.fillStyle = brassGrad(-7, -2); cx.fillRect(0, -7, Lr, 4); cx.globalAlpha = 1;
+    cx.fillStyle = brassGrad(-3, 3); cx.fillRect(0, -3, Lr, 6);
+    if (Q) { // brushed streaks + moving specular glint
+      cx.fillStyle = 'rgba(255,248,215,.55)'; cx.fillRect(0, -2, Lr, 0.8);
+      var gx = (Lr * 0.3 + a * 900) ; var sg = cx.createLinearGradient(gx - 60, 0, gx + 60, 0); sg.addColorStop(0, 'rgba(255,255,240,0)'); sg.addColorStop(.5, 'rgba(255,255,240,.6)'); sg.addColorStop(1, 'rgba(255,255,240,0)');
+      cx.fillStyle = sg; cx.fillRect(gx - 60, -2.5, 120, 2); }
+    // end stop
+    cx.fillStyle = brassGrad(-22, 3); var es = (r.ux > 0 ? 1 : 1); cx.fillRect(Lr - 4, -22, 5, 25); cx.fillStyle = 'rgba(255,240,200,.5)'; cx.fillRect(Lr - 4, -22, 1, 25);
     cx.restore();
-    // pivot
-    cx.fillStyle = '#3b2412'; cx.beginPath(); cx.arc(r.hx, r.hy, 6, 0, 7); cx.fill();
-    cx.fillStyle = brass(r.hx - 4, r.hy - 4, r.hx + 4, r.hy + 4); cx.beginPath(); cx.arc(r.hx, r.hy, 4, 0, 7); cx.fill();
+    // pivot boss
+    cx.fillStyle = '#2b1a0c'; cx.beginPath(); cx.arc(r.hx, r.hy, 8, 0, 7); cx.fill();
+    var pg = cx.createRadialGradient(r.hx - 2, r.hy - 2, 0, r.hx, r.hy, 6); pg.addColorStop(0, '#fff2c0'); pg.addColorStop(.5, '#c99d40'); pg.addColorStop(1, '#5a4214');
+    cx.fillStyle = pg; cx.beginPath(); cx.arc(r.hx, r.hy, 5.5, 0, 7); cx.fill();
   }
-  function label(t, x, y) { cx.fillStyle = 'rgba(217,179,106,.55)'; cx.font = '600 15px Georgia,serif'; cx.fillText(t, x, y); }
-  function draw(now) {
-    cx.setTransform(1, 0, 0, 1, 0, 0); cx.fillStyle = '#0b0805'; cx.fillRect(0, 0, cv.width, cv.height);
+  var screwPhase = 0;
+  function drawScrew() {
+    var x = LIFT.x, y0 = LIFT.yt - 26, y1 = LIFT.yb + 16, w = 12;
+    if (liftBall && liftBall.y < LIFT.yb - 1 && liftBall.y > LIFT.yt + 1) screwPhase = -liftBall.y;
+    var cg = cx.createLinearGradient(x - w, 0, x + w, 0); cg.addColorStop(0, '#3a2a0a'); cg.addColorStop(.3, '#e9cf82'); cg.addColorStop(.45, '#fff4cc'); cg.addColorStop(.7, '#9a7426'); cg.addColorStop(1, '#2a1d06');
+    cx.fillStyle = cg; cx.fillRect(x - w, y0, 2 * w, y1 - y0);
+    // helical thread (pitch 30px) that advances with the ball
+    var P = 30, ph = ((screwPhase % P) + P) % P;
+    cx.save(); cx.beginPath(); cx.rect(x - w, y0, 2 * w, y1 - y0); cx.clip();
+    cx.lineWidth = 3;
+    for (var y = y0 - P + ph; y < y1 + P; y += P) {
+      cx.strokeStyle = 'rgba(30,20,5,.75)'; cx.beginPath(); cx.moveTo(x - w, y); cx.quadraticCurveTo(x, y + P * .32, x + w, y + P * .5); cx.stroke();
+      cx.strokeStyle = 'rgba(255,240,190,.55)'; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(x - w, y - 2); cx.quadraticCurveTo(x, y + P * .32 - 2, x + w, y + P * .5 - 2); cx.stroke(); cx.lineWidth = 3; }
+    cx.restore();
+    // guide rods
+    cx.strokeStyle = '#8a6a26'; cx.lineWidth = 2.5; cx.beginPath(); cx.moveTo(x - 22, y0); cx.lineTo(x - 22, y1); cx.moveTo(x + 22, y0); cx.lineTo(x + 22, y1); cx.stroke();
+    cx.strokeStyle = 'rgba(255,240,190,.5)'; cx.lineWidth = 0.8; cx.beginPath(); cx.moveTo(x - 23, y0); cx.lineTo(x - 23, y1); cx.moveTo(x + 21, y0); cx.lineTo(x + 21, y1); cx.stroke();
+  }
+  function surfaceBelow(b) {   // y of the surface under a ball (for contact shadows / AO)
+    var best = TRAY.y0 + 30, ks = ['min', 'five', 'hour'];
+    for (var i = 0; i < ks.length; i++) { var r = RAILS[ks[i]], lo = Math.min(r.lx, r.hx), hi = Math.max(r.lx, r.hx);
+      if (b.x >= lo - 4 && b.x <= hi + 4) { var y = r.ly + (b.x - r.lx) / (r.hx - r.lx) * (r.hy - r.ly); if (y >= b.y + R - 2 && y < best) best = y; } }
+    if (b.x > TRAY.x0 && b.x < TRAY.x1 + 10) { var ty = trayY(b.x) + R + 2; if (ty >= b.y + R - 2 && ty < best) best = ty; }
+    if (Math.abs(b.x - LIFT.x) < 3) best = Math.min(best, b.y + R + 2);
+    return best; }
+  function drawBalls() {
+    var all = balls.concat([fixedBall]), s = 2 * R + 0.5, i, b;
+    if (Q) for (i = 0; i < all.length; i++) {   // contact shadow + ambient occlusion
+      b = all[i]; var sy = surfaceBelow(b), gap = sy - (b.y + R), k = Math.max(0, 1 - gap / 60);
+      if (k <= 0) continue; cx.globalAlpha = 0.85 * k; var ww = R * (2.2 + gap / 25);
+      cx.drawImage(shadowSpr, b.x - ww + 2, sy - ww * .22, ww * 2, ww * .45); }
+    cx.globalAlpha = 1;
+    for (i = 0; i < all.length; i++) { b = all[i];
+      cx.drawImage(ballSpr, b.x - s / 2, b.y - s / 2, s, s);
+      // faint machining mark that turns with the ball (shows true rolling)
+      var mx = b.x + Math.cos(b.rot) * R * .55, my = b.y + Math.sin(b.rot) * R * .55;
+      cx.fillStyle = 'rgba(20,20,22,.22)'; cx.beginPath(); cx.arc(mx, my, 1.4, 0, 7); cx.fill();
+      cx.fillStyle = 'rgba(20,20,22,.12)'; cx.beginPath(); cx.arc(2 * b.x - mx, 2 * b.y - my, 1.1, 0, 7); cx.fill(); }
+    cx.strokeStyle = 'rgba(214,170,80,.75)'; cx.lineWidth = 1.5; cx.beginPath(); cx.arc(fixedBall.x, fixedBall.y, R + 2, 0, 7); cx.stroke();
+  }
+  function draw(t) {
+    cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(staticL, 0, 0);
     cx.setTransform(sc, 0, 0, sc, ox, oy);
-    var bg = cx.createRadialGradient(500, 330, 50, 500, 350, 620); bg.addColorStop(0, '#241810'); bg.addColorStop(1, '#0b0805');
-    cx.fillStyle = bg; cx.fillRect(-500, -300, 2000, 1300);
-    // back board
-    cx.fillStyle = woodGrad(0, 60, 0, 690); cx.globalAlpha = .18; cx.fillRect(70, 60, 900, 610); cx.globalAlpha = 1;
-    // posts
-    cx.fillStyle = woodGrad(80, 0, 100, 0); cx.fillRect(84, 120, 14, 540);
-    cx.fillStyle = woodGrad(950, 0, 970, 0); cx.fillRect(952, 80, 16, 580);
-    // lift
-    cx.strokeStyle = brass(LIFT.x - 26, 0, LIFT.x + 26, 0); cx.lineWidth = 4;
-    cx.beginPath(); cx.moveTo(LIFT.x - 18, LIFT.yb + 14); cx.lineTo(LIFT.x - 18, LIFT.yt - 20); cx.moveTo(LIFT.x + 18, LIFT.yb + 14); cx.lineTo(LIFT.x + 18, LIFT.yt - 20); cx.stroke();
-    cx.fillStyle = woodGrad(LIFT.x - 30, 0, LIFT.x + 30, 0); cx.fillRect(LIFT.x - 30, LIFT.yt - 34, 60, 14); cx.fillRect(LIFT.x - 30, LIFT.yb + 14, 60, 14);
-    // labels
-    label('MINUTES', 560, 120); label('FIVE MINUTES', 430, 255); label('HOURS', 470, 380);
-    drawRail(RAILS.min, now); drawRail(RAILS.five, now); drawRail(RAILS.hour, now);
-    // tray
-    cx.fillStyle = 'rgba(0,0,0,.5)'; cx.beginPath(); cx.moveTo(TRAY.x0, TRAY.y0 + 6); cx.lineTo(TRAY.x1, TRAY.y1 + 6); cx.lineTo(TRAY.x1, TRAY.y1 + 26); cx.lineTo(TRAY.x0, TRAY.y0 + 26); cx.fill();
-    cx.fillStyle = woodGrad(0, TRAY.y0, 0, TRAY.y0 + 20); cx.beginPath(); cx.moveTo(TRAY.x0, TRAY.y0); cx.lineTo(TRAY.x1 + 10, TRAY.y1); cx.lineTo(TRAY.x1 + 10, TRAY.y1 + 18); cx.lineTo(TRAY.x0, TRAY.y0 + 18); cx.fill();
-    cx.fillStyle = woodGrad(0, 0, 0, 1); cx.fillRect(TRAY.x0 - 8, TRAY.y0 - 22, 10, 40);
-    // base
-    cx.fillStyle = woodGrad(0, 670, 0, 690); cx.fillRect(60, 672, 920, 18);
-    // balls
-    var all = balls.concat([fixedBall]), s = ballSprite.width / sc;
-    for (var i = 0; i < all.length; i++) {
-      var b = all[i];
-      cx.fillStyle = 'rgba(0,0,0,.35)'; cx.beginPath(); cx.ellipse ? cx.ellipse(b.x + 2, b.y + R + 1, R * .8, 3, 0, 0, 7) : cx.arc(b.x, b.y + R, 3, 0, 7); cx.fill();
-      cx.drawImage(ballSprite, b.x - s / 2, b.y - s / 2, s, s);
-    }
-    // fixed ball marker (brass ring)
-    cx.strokeStyle = 'rgba(201,160,70,.7)'; cx.lineWidth = 2; cx.beginPath(); cx.arc(fixedBall.x, fixedBall.y, R + 2, 0, 7); cx.stroke();
+    drawScrew(); drawRail(RAILS.min, t); drawRail(RAILS.five, t); drawRail(RAILS.hour, t); drawBalls();
+    if (Q) { cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(vignL, 0, 0); }
   }
-  var last = 0, curMin = -1;
-  function sync(force) {
-    var d = new Date(), key = d.getHours() * 60 + d.getMinutes();
-    if (curMin < 0 || force) { setup(d.getHours(), d.getMinutes()); curMin = key; return; }
+  // ---------- sound (synthesized steel clack; off by default) ----------
+  var AC = null, lastSnd = 0;
+  function clack(vol) {
+    if (!sndOn || !AC) return; var tn = AC.currentTime; if (tn - lastSnd < 0.025) return; lastSnd = tn;
+    var o = AC.createOscillator(), g = AC.createGain(); o.type = 'triangle'; o.frequency.value = 2400 + Math.random() * 1600;
+    g.gain.setValueAtTime(0.0001, tn); g.gain.exponentialRampToValueAtTime(0.25 * vol + 0.01, tn + 0.002); g.gain.exponentialRampToValueAtTime(0.0001, tn + 0.05);
+    o.connect(g); g.connect(AC.destination); o.start(tn); o.stop(tn + 0.06); }
+  soundHook = clack;
+  function setSndIcon() { sndBtn.innerHTML = sndOn ? '&#128264;' : '&#128263;'; sndBtn.style.opacity = sndOn ? .7 : .35; }
+  function toggleSnd(e) { e.preventDefault(); e.stopPropagation(); sndOn = !sndOn;
+    try { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); if (AC.resume) AC.resume(); } catch (x) {}
+    try { localStorage.setItem('bc_snd', sndOn ? '1' : '0'); } catch (x) {} setSndIcon(); clack(1); }
+  sndBtn.addEventListener('touchend', toggleSnd, false); sndBtn.addEventListener('click', toggleSnd, false); setSndIcon();
+  // ---------- loop ----------
+  var last = 0, curMin = -1, ft = 0, fn = 0;
+  function sync() {
+    var d = clock(), key = d.getHours() * 60 + d.getMinutes();
+    if (curMin < 0) { setup(d.getHours(), d.getMinutes()); curMin = key; return; }
     if (key === curMin) return;
     var diff = (key - curMin + 1440) % 1440;
     if (diff === 1) tick(); else setup(d.getHours(), d.getMinutes());
     curMin = key;
   }
+  var ffm = /[?&]ff=(\d+)/.exec(location.search);   // screenshot/debug: fast-forward N ms into the next minute, then freeze
+  if (ffm) { resize(); var d1 = clock(); setup(d1.getHours(), d1.getMinutes()); now = 0; tick(); var N = +ffm[1];
+    while (now < N) { now += 16; update(16); } draw(now); if (showLbl) { var dd = new Date(clock().getTime() + 60000); lbl.textContent = (dd.getHours() % 12 || 12) + ':' + (dd.getMinutes() < 10 ? '0' : '') + dd.getMinutes(); } lbl.style.display = showLbl ? 'block' : 'none'; return; }
   function frame(t) {
     var dt = last ? Math.min(100, t - last) : 16; last = t; now = t;
-    sync(false); update(dt); draw(t);
-    if (showLbl) { var d = new Date(), h = d.getHours() % 12 || 12, m = d.getMinutes(); var s = h + ':' + (m < 10 ? '0' : '') + m; if (s !== shown) { lbl.textContent = s; shown = s; } }
+    if (Q && dt < 100) { ft += dt; fn++; if (fn === 90) { if (ft / fn > 36) { Q = 0; resize(); } ft = fn = 0; } }  // auto quality fallback below ~28fps
+    sync(); update(dt); draw(t);
+    if (showLbl) { var d = clock(), h = d.getHours() % 12 || 12, mm = d.getMinutes(), s = h + ':' + (mm < 10 ? '0' : '') + mm; if (s !== shown) { lbl.textContent = s; shown = s; } }
     requestAnimationFrame(frame);
   }
   lbl.style.display = showLbl ? 'block' : 'none';
-  function toggle(e) { if (e && e.preventDefault) e.preventDefault(); showLbl = !showLbl; lbl.style.display = showLbl ? 'block' : 'none'; shown = null; try { localStorage.setItem('bc_lbl', showLbl ? '1' : '0'); } catch (x) {} requestWake(); }
+  function toggle(e) { if (e && e.preventDefault) e.preventDefault(); showLbl = !showLbl; lbl.style.display = showLbl ? 'block' : 'none'; shown = null; try { localStorage.setItem('bc_lbl', showLbl ? '1' : '0'); } catch (x) {} if (AC && AC.resume) AC.resume(); requestWake(); }
   document.addEventListener('touchend', toggle, false); document.addEventListener('click', toggle, false);
   window.addEventListener('resize', resize); window.addEventListener('orientationchange', function () { setTimeout(resize, 300); });
-  // Wake Lock where supported
   var wl = null;
   function requestWake() { try { if (navigator.wakeLock && !wl) navigator.wakeLock.request('screen').then(function (l) { wl = l; l.addEventListener('release', function () { wl = null; }); }, function () {}); } catch (e) {} }
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { requestWake(); curMin = -1; } });
