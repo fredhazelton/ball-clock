@@ -131,7 +131,7 @@ if (typeof module !== 'undefined') { module.exports = { setup: setup, tick: tick
 if (typeof document !== 'undefined') (function () {
   var cv = document.getElementById('c'), cx = cv.getContext('2d'), lbl = document.getElementById('lbl');
   var sc = 1, ox = 0, oy = 0, dpr = 1, ballSprite, shown = null, showLbl = false;
-  try { showLbl = localStorage.getItem('bc_lbl') === '1'; } catch (e) {}
+  var showLbl = true; try { showLbl = localStorage.getItem('bc_lbl') !== '0'; } catch (e) {}
   function resize() {
     dpr = Math.min(window.devicePixelRatio || 1, 2);
     var w = window.innerWidth, h = window.innerHeight;
