@@ -13,31 +13,33 @@
 <style>
 html,body{margin:0;padding:0;height:100%;background:#070504;overflow:hidden;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;touch-action:none}
 canvas{display:block;position:absolute;left:0;top:0}
-#lbl{position:absolute;right:2.5vw;bottom:2vh;font:600 10vh "Helvetica Neue",Helvetica,Arial,sans-serif;color:#d9b36a;opacity:.95;display:none;letter-spacing:.05em;text-shadow:0 0 8px #000}
-#snd{position:absolute;left:1.5vw;top:1.5vh;width:44px;height:44px;opacity:.35;color:#d9b36a;font:22px/44px sans-serif;text-align:center;border-radius:22px}
+#lbl{position:absolute;right:2.5vw;bottom:2vh;font:600 10vh "Helvetica Neue",Helvetica,Arial,sans-serif;color:#f1ece2;opacity:.95;display:none;letter-spacing:.05em;text-shadow:0 0 8px #000}
+#snd{position:absolute;left:1.5vw;top:1.5vh;width:44px;height:44px;opacity:.35;color:#333;font:22px/44px sans-serif;text-align:center;border-radius:22px}
 </style></head><body>
 <canvas id="c"></canvas><div id="lbl"></div><div id="snd">&#128263;</div>
 <script>
 // ================= ENGINE (no DOM; tested by test.js) =================
-var W = 1000, H = 700, R = 14, SP = 29, NBALLS = 30;
-var ACC = 0.0006, GRAV = 0.0026;           // px/ms^2: rolling (g sin(theta) * 5/7) and free fall
+// Layout follows the "Time Machine" rolling-ball marble-run clock (see ref/NOTES.md)
+var W = 1000, H = 700, R = 11, SP = 24, NBALLS = 30;
+var ACC = 0.0006, GRAV = 0.0026;
 function rail(lx, ly, hx, hy) { var dx = hx - lx, dy = hy - ly, L = Math.sqrt(dx * dx + dy * dy); return { lx: lx, ly: ly, hx: hx, hy: hy, ux: dx / L, uy: dy / L, len: L, tip: -1e9, hold: 0 }; }
-var RAILS = { min: rail(200, 190, 820, 150), five: rail(830, 320, 170, 280), hour: rail(170, 450, 860, 410) };
-var DROPX = { min: 118, five: 884, hour: 118 };
-var TRAY = { x0: 100, y0: 626, x1: 885, y1: 648 };
-var LIFT = { x: 930, yb: 650, yt: 112 };
+var RAILS = { min: rail(760, 236, 372, 212), five: rail(190, 330, 815, 296), hour: rail(185, 492, 855, 458) };
+var CHUTE = { x0: 150, y0: 392, x1: 845, y1: 428 };
+var DROPX = { min: 805, five: 142, hour: 138 };
+var TRAY = { cx: 520, cy: 626, x0: 115, x1: 925 };
+var ARM = { x: 520, y: 404, r: 222 };
 var balls = [], res = [], C = { min: [], five: [], hour: [] }, fixedBall, now = 0, liftBall = null, soundHook = null;
 function tipAngle(r, t) {
-  var el = t - r.tip, A = 0.075 * (r.ux > 0 ? -1 : 1);
+  var el = t - r.tip, A = 0.045 * (r.ux > 0 ? -1 : 1);
   if (el < 0 || el > r.hold + 2600) return 0;
   if (el < 200) { var k = el / 200; return A * k * k; }
   if (el < r.hold) return A;
-  var s = el - r.hold; return A * Math.exp(-s / 320) * Math.cos(s / 75);   // spring back with damped overshoot
+  var s = el - r.hold; return A * Math.exp(-s / 320) * Math.cos(s / 75);
 }
 function rot(r, p, a) { if (!a) return p; var dx = p.x - r.hx, dy = p.y - r.hy, c = Math.cos(a), s = Math.sin(a); return { x: r.hx + dx * c - dy * s, y: r.hy + dx * s + dy * c }; }
-function slotPos(r, i) { var d = R + 3 + i * SP; return { x: r.lx + r.ux * d, y: r.ly + r.uy * d - (R + 3) }; }
-function trayY(x) { return TRAY.y0 + (x - TRAY.x0) / (TRAY.x1 - TRAY.x0) * (TRAY.y1 - TRAY.y0) - R - 2; }
-function trayPos(i) { var x = TRAY.x1 - R - 4 - i * (2 * R + 0.5); return { x: x, y: trayY(x) }; }
+function slotPos(r, i) { var d = R + 4 + i * SP; return { x: r.lx + r.ux * d, y: r.ly + r.uy * d - (R + 1) }; }
+function trayY(x) { return TRAY.cy - Math.abs(x - TRAY.cx) * 0.04 - R - 1; }
+function trayPos(i) { var k = Math.floor(i / 2) + 0.5, x = TRAY.cx + (i % 2 ? -1 : 1) * k * (2 * R + 0.6); return { x: x, y: trayY(x) }; }
 function restPos(b) {
   var i;
   if ((i = res.indexOf(b)) >= 0) return trayPos(i);
@@ -47,7 +49,7 @@ function restPos(b) {
   if (b === fixedBall) return rot(RAILS.hour, slotPos(RAILS.hour, 0), tipAngle(RAILS.hour, now));
   return { x: b.x, y: b.y };
 }
-function mkBall() { return { x: 0, y: 0, vx: 0, vy: 0, rot: Math.random() * 6.28, segs: [], t0: 0, sx: 0, sy: 0 }; }
+function mkBall() { return { x: 0, y: 0, vx: 0, vy: 0, rot: Math.random() * 6.28, segs: [], t0: 0, sx: 0, sy: 0, back: false }; }
 function setup(h, m) {
   balls = []; res = []; C = { min: [], five: [], hour: [] }; liftBall = null;
   for (var k in RAILS) RAILS[k].tip = -1e9;
@@ -60,87 +62,91 @@ function setup(h, m) {
   var all = balls.concat([fixedBall]);
   for (i = 0; i < all.length; i++) { var p = restPos(all[i]); all[i].x = p.x; all[i].y = p.y; all[i].vx = all[i].vy = 0; all[i].segs = []; }
 }
-function seg(b, x, y, d, e, snd) { b.segs.push({ x: x, y: y, d: d, e: e || 'lin', snd: snd || 0 }); return d; }
-function wait(b, d) { return seg(b, null, null, d); }
+function seg(b, x, y, d, e, snd, bk) { b.segs.push({ x: x, y: y, d: d, e: e || 'lin', snd: snd || 0, bk: !!bk }); return d; }
+function wait(b, d, bk) { return seg(b, null, null, d, 'lin', 0, bk); }
 function dist(x0, y0, x1, y1) { var dx = x1 - x0, dy = y1 - y0; return Math.sqrt(dx * dx + dy * dy); }
-function rollT(L) { return Math.max(120, Math.sqrt(2 * L / ACC)); }            // from rest, constant acceleration
+function rollT(L) { return Math.max(110, Math.sqrt(2 * L / ACC)); }
 function fallT(h) { return Math.max(60, Math.sqrt(2 * Math.max(1, h) / GRAV)); }
-// rebound against a stop or ball: back up the rail a little, roll back, settle
-function railBounce(b, x, y, r, dirSign, vol) {
-  var ax = r.ux * dirSign, ay = r.uy * dirSign, T = 0;
-  T += seg(b, x + ax * 4, y + ay * 4, 110, 'out'); T += seg(b, x, y, 110, 'in', vol * 0.4);
-  T += seg(b, x + ax * 1.2, y + ay * 1.2, 60, 'out'); T += seg(b, x, y, 60, 'in');
-  return T;
-}
-function landBounce(b, x, y, vol) {
+function railBounce(b, x, y, r, vol) {
   var T = 0;
-  T += seg(b, x - 3, y - 10, 150, 'out'); T += seg(b, x - 6, y, 150, 'in', vol * 0.5);
-  T += seg(b, x - 8, y - 3, 80, 'out'); T += seg(b, x - 9, y, 80, 'in', vol * 0.2);
+  T += seg(b, x + r.ux * 3.5, y + r.uy * 3.5, 100, 'out'); T += seg(b, x, y, 100, 'in', vol * 0.4);
+  T += seg(b, x + r.ux, y + r.uy, 55, 'out'); T += seg(b, x, y, 55, 'in');
   return T;
 }
-function dropOff(b, r, key, from, T0) {
-  // roll from rest down to the low end, launch off the end, fall in a parabola into the tray and bounce
-  var ex = r.lx - r.ux * 4, ey = r.ly - r.uy * 4 - R - 3, T = 0;
+function landBounce(b, x, y, vol) {   // lands in the back trough, rattles, then the queue settles
+  var T = 0, s = x > TRAY.cx ? -1 : 1;
+  T += seg(b, x + s * 3, y - 9, 140, 'out', 0, 1); T += seg(b, x + s * 6, y, 140, 'in', vol * 0.5, 1);
+  T += seg(b, x + s * 8, y - 3, 75, 'out', 0, 1); T += seg(b, x + s * 9, y, 75, 'in', vol * 0.2, 1);
+  return T;
+}
+function dropOff(b, r, key, from) {   // roll off the low end and fall behind the front rails into the trough
+  var ex = r.lx - r.ux * 4, ey = r.ly - r.uy * 4 - R - 1, T = 0;
   T += seg(b, ex, ey, rollT(dist(from.x, from.y, ex, ey) + 8), 'in');
   var ty = trayY(DROPX[key]);
-  T += seg(b, DROPX[key], ty, fallT(ty - ey) * 1.05, 'para', 1);
+  T += seg(b, DROPX[key], ty, fallT(ty - ey) * 1.05, 'para', 1, 1);
   T += landBounce(b, DROPX[key], ty, 0.8);
   return T;
 }
 function dump(list, key, T) {
-  var r = RAILS[key], maxT = 0;
+  var r = RAILS[key], maxT = 0, A = 0.045 * (r.ux > 0 ? -1 : 1);
   r.tip = now + T;
   for (var k = 0; k < list.length; k++) {
-    var b = list[k], p = slotPos(r, key === 'hour' ? k + 1 : k), tt;
+    var b = list[k], p = slotPos(r, key === 'hour' ? k + 1 : k);
     b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y;
-    tt = wait(b, T + 160 + k * 40);
-    var A = 0.075 * (r.ux > 0 ? -1 : 1); var pr = rot(r, p, A);
-    tt += seg(b, pr.x, pr.y, 140, 'in');
-    tt += dropOff(b, r, key, pr, 0);
+    b.segs.push({ x: null, y: null, d: T + 160 + k * 40, e: 'lin', fol: { r: r, p: p } });
+    var pr = rot(r, p, A); seg(b, pr.x, pr.y, 140, 'in');
+    dropOff(b, r, key, pr);
     maxT = Math.max(maxT, T + 160 + k * 40 + 400);
     res.push(b);
   }
   r.hold = Math.max(500, maxT - T);
-  return maxT;
 }
 function tick() {
   var b = res.shift(), T = 0, p;
   b.segs = []; b.t0 = now; b.sx = b.x; b.sy = b.y; liftBall = b;
-  T += seg(b, LIFT.x, LIFT.yb, 380, 'in', 0.5);         // rolls into the screw's cup
-  T += seg(b, LIFT.x, LIFT.yt, 2600, 'lin');            // screw lift
-  b.liftEnd = now + T;
-  var r = RAILS.min, cx = r.hx + 6, cy = r.hy - R - 3;
-  T += seg(b, cx, cy, 260, 'para', 0.6);                // tossed onto the minute rail
+  var py = ARM.y + ARM.r;
+  T += seg(b, ARM.x, py, 360, 'in', 0.5, 1);                    // rolls into the arm's cup at the bottom of the trough
+  var r = RAILS.min, tx = r.hx - r.ux * 6, ty = r.hy - r.uy * 6 - R - 1;
+  var a1 = Math.atan2(ty - 10 - ARM.y, tx - ARM.x); if (a1 < Math.PI / 2) a1 += 2 * Math.PI;
+  var sg = { x: ARM.x + Math.cos(a1) * ARM.r, y: ARM.y + Math.sin(a1) * ARM.r, d: 2600, e: 'arc', a0: Math.PI / 2, a1: a1, snd: 0, bk: true };
+  b.segs.push(sg); T += 2600;                                    // the arm swings the ball up and over
+  var cx = tx, cy = ty;
+  T += seg(b, cx, cy, 220, 'para', 0.6);                         // tipped out onto the MIN rail
   function goRail(key) {
     var r = RAILS[key], list = C[key], cap = key === 'min' ? 4 : 11, off = key === 'hour' ? 1 : 0;
-    if (key !== 'min') { var hx = r.hx - r.ux * 6, hy = r.hy - r.uy * 6 - R - 3; T += seg(b, hx, hy, fallT(hy - cy), 'para', 0.7); cx = hx; cy = hy; }
+    if (key !== 'min') { var hx = r.hx - r.ux * 6, hy = r.hy - r.uy * 6 - R - 1; T += seg(b, hx, hy, fallT(Math.abs(hy - cy) + 4), 'para', 0.7); cx = hx; cy = hy; }
     p = slotPos(r, list.length + off);
     T += seg(b, p.x, p.y, rollT(dist(cx, cy, p.x, p.y)), 'in');
-    if (list.length < cap) { T += railBounce(b, p.x, p.y, r, 1, 0.9); list.push(b); return; }
-    // full: the extra ball trips the rail; it tips, contents dump, rail springs back
+    if (list.length < cap) { T += railBounce(b, p.x, p.y, r, 0.9); list.push(b); return; }
     var dumped = list.splice(0, list.length);
     seg(b, p.x, p.y, 1, 'lin', 1);
     dump(dumped, key, T);
-    if (key === 'hour') { T += wait(b, 300); dropOff(b, r, 'hour', p, T); res.push(b); return; }
-    var A = 0.075 * (r.ux > 0 ? -1 : 1), pr = rot(r, p, A);
+    if (key === 'hour') { T += wait(b, 300); dropOff(b, r, 'hour', p); res.push(b); return; }
+    var A = 0.045 * (r.ux > 0 ? -1 : 1), pr = rot(r, p, A);
     T += seg(b, pr.x, pr.y, 200, 'in');
-    var ex = r.lx - r.ux * 2, ey = r.ly - r.uy * 2 - R - 3;   // carried ball runs off the low end onto the next rail
+    var ex = r.lx - r.ux * 2, ey = r.ly - r.uy * 2 - R - 1;
     T += seg(b, ex, ey, rollT(dist(pr.x, pr.y, ex, ey)) * 0.7, 'in');
     cx = ex; cy = ey;
+    if (key === 'five') {     // drops into the rear return chute, runs back to the right, onto the hour rail
+      var c0y = CHUTE.y0 - R - 1, c1y = CHUTE.y1 - R - 1;
+      T += seg(b, CHUTE.x0, c0y, fallT(c0y - cy), 'para', 0.6, 1);
+      T += seg(b, CHUTE.x1, c1y, rollT(dist(CHUTE.x0, c0y, CHUTE.x1, c1y)) * 0.8, 'in', 0, 1);
+      cx = CHUTE.x1; cy = c1y;
+    }
     goRail(key === 'min' ? 'five' : 'hour');
   }
   goRail('min');
 }
 function ease(e, t) {
   if (e === 'io') return t < .5 ? 2 * t * t : 1 - 2 * (1 - t) * (1 - t);
-  if (e === 'in') return t * t;          // constant acceleration from rest
+  if (e === 'in') return t * t;
   if (e === 'out') return 1 - (1 - t) * (1 - t);
   return t;
 }
 function update(dt) {
   var all = balls.concat([fixedBall]);
   for (var i = 0; i < all.length; i++) {
-    var b = all[i], ox = b.x, oy = b.y;
+    var b = all[i], ox = b.x;
     while (b.segs.length) {
       var s = b.segs[0], el = now - b.t0;
       if (el >= s.d) {
@@ -148,21 +154,25 @@ function update(dt) {
         if (s.snd && soundHook && el - s.d < 200) soundHook(s.snd);
         continue;
       }
-      if (s.x !== null) {
+      b.back = s.bk;
+      if (s.fol) { var fp = rot(s.fol.r, s.fol.p, tipAngle(s.fol.r, now)); b.x = b.sx = fp.x; b.y = b.sy = fp.y; break; }
+      if (s.e === 'arc') { var q = ease('io', el / s.d), a = s.a0 + (s.a1 - s.a0) * q; b.x = ARM.x + Math.cos(a) * ARM.r; b.y = ARM.y + Math.sin(a) * ARM.r; b.arm = a; }
+      else if (s.x !== null) {
         var k = el / s.d;
         if (s.e === 'para') { b.x = b.sx + (s.x - b.sx) * k; b.y = b.sy + (s.y - b.sy) * k * k; }
-        else { var q = ease(s.e, k); b.x = b.sx + (s.x - b.sx) * q; b.y = b.sy + (s.y - b.sy) * q; }
+        else { var e = ease(s.e, k); b.x = b.sx + (s.x - b.sx) * e; b.y = b.sy + (s.y - b.sy) * e; }
       }
       break;
     }
-    if (!b.segs.length) {     // idle: damped spring toward rest (gives the reservoir its jostle)
+    if (!b.segs.length) {
+      b.back = res.indexOf(b) >= 0;
       var p = restPos(b), left = dt;
       if (b === liftBall) liftBall = null;
       while (left > 0) { var h = Math.min(8, left); left -= h;
         b.vx += ((p.x - b.x) * 0.00011 - b.vx * 0.016) * h; b.vy += ((p.y - b.y) * 0.00011 - b.vy * 0.016) * h;
         b.x += b.vx * h; b.y += b.vy * h; }
     }
-    b.rot += (b.x - ox) / R;   // true rolling rotation
+    b.rot += (b.x - ox) / R;
   }
 }
 function readTime() { return { h: C.hour.length + 1, m: C.five.length * 5 + C.min.length }; }
@@ -201,9 +211,9 @@ if (typeof document !== 'undefined') (function () {
       if (d2 > 1) { D[o + 3] = 0; continue; }
       var nz = Math.sqrt(1 - d2), rx = 2 * nz * nx, ry = 2 * nz * ny, rz = 2 * nz * nz - 1, R0, G0, B0;
       if (ry > 0.08) {            // floor / walnut base reflection
-        var f = Math.min(1, (ry - 0.08) * 1.5); R0 = 150 - f * 70; G0 = 110 - f * 55; B0 = 80 - f * 45;
+        var f = Math.min(1, (ry - 0.08) * 1.5); R0 = 150 - f * 60; G0 = 85 - f * 40; B0 = 60 - f * 30;
       } else {                    // dim room + horizon glow
-        var hz = Math.exp(-Math.abs(ry - 0.08) * 9); R0 = 70 + hz * 150; G0 = 70 + hz * 140; B0 = 74 + hz * 130;
+        var hz = Math.exp(-Math.abs(ry - 0.08) * 9); R0 = 125 + hz * 110; G0 = 119 + hz * 105; B0 = 110 + hz * 100;
         if (rz > 0.5) { R0 += 20; G0 += 16; B0 += 12; }
       }
       // key softbox (top-left, front) and strip light (right)
@@ -223,47 +233,55 @@ if (typeof document !== 'undefined') (function () {
 
   function L(c) { return c.getContext('2d'); }
   function newLayer() { var c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height; var g = L(c); g.setTransform(sc, 0, 0, sc, ox, oy); return c; }
-  function woodRect(g, x, y, w, h, vertical) {
-    g.save(); g.beginPath(); g.rect(x, y, w, h); g.clip();
-    if (vertical) { g.translate(x, y); g.rotate(Math.PI / 2); g.drawImage(woodH, (x * 3) % 200, 0, h, woodH.height * 0.4, 0, -w, h, w); }
-    else g.drawImage(woodH, (y * 7) % 300, (x * 0.1) % 50, w, Math.min(h * 1.5, woodH.height - 60), x, y, w, h);
-    // varnish: soft top highlight and bottom falloff
-    var lg = vertical ? g.createLinearGradient(x, 0, x + w, 0) : g.createLinearGradient(0, y, 0, y + h);
-    lg.addColorStop(0, 'rgba(255,230,190,.28)'); lg.addColorStop(.15, 'rgba(255,230,190,.06)'); lg.addColorStop(.7, 'rgba(0,0,0,0)'); lg.addColorStop(1, 'rgba(0,0,0,.45)');
-    g.fillStyle = lg; g.fillRect(x, y, w, h); g.restore(); }
+  // ---------- static layers ----------
+  function plastic(g, x, y, w, h) {
+    var lg = g.createLinearGradient(x, 0, x + w, 0); lg.addColorStop(0, '#2c2c30'); lg.addColorStop(.18, '#141416'); lg.addColorStop(.8, '#0a0a0b'); lg.addColorStop(1, '#030304');
+    g.fillStyle = lg; g.fillRect(x, y, w, h); g.fillStyle = 'rgba(255,255,255,.16)'; g.fillRect(x, y, w, 1); g.fillRect(x, y, 1, h); }
+  function picket(g, x, top, bot, w) {
+    var lg = g.createLinearGradient(x, 0, x + w, 0); lg.addColorStop(0, '#3a3a3f'); lg.addColorStop(.25, '#17171a'); lg.addColorStop(.75, '#0b0b0c'); lg.addColorStop(1, '#020203');
+    g.fillStyle = 'rgba(0,0,0,.18)'; g.fillRect(x + w + 2, top + w + 4, 7, bot - top - w);   // soft shadow (light from the left)
+    g.fillStyle = lg; g.beginPath(); g.moveTo(x + w / 2, top); g.lineTo(x + w, top + w * 1.1); g.lineTo(x + w, bot); g.lineTo(x, bot); g.lineTo(x, top + w * 1.1); g.closePath(); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.22)'; g.lineWidth = 1; g.beginPath(); g.moveTo(x + .5, bot); g.lineTo(x + .5, top + w * 1.1); g.lineTo(x + w / 2, top + .5); g.stroke();
+    g.fillStyle = '#0c0c0e'; g.fillRect(x - 6, bot - 6, w + 12, 8); }   // foot
+  var frontL;
   function buildStatic() {
     staticL = newLayer(); var g = L(staticL);
-    var bg = g.createRadialGradient(470, 260, 40, 500, 330, 760); bg.addColorStop(0, '#2c2119'); bg.addColorStop(.5, '#16100b'); bg.addColorStop(1, '#060403');
-    g.fillStyle = bg; g.fillRect(-1000, -600, 3000, 1900);
-    // soft floor reflection band
-    var fl = g.createLinearGradient(0, 690, 0, 760); fl.addColorStop(0, 'rgba(60,40,25,.6)'); fl.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = fl; g.fillRect(-500, 690, 2000, 80);
-    // posts and shadow on wall
-    g.fillStyle = 'rgba(0,0,0,.35)'; g.fillRect(96, 128, 18, 540); g.fillRect(968, 88, 20, 580);
-    woodRect(g, 82, 118, 18, 556, true); woodRect(g, 950, 76, 22, 598, true);
-    // lift frame blocks
-    woodRect(g, LIFT.x - 34, LIFT.yt - 44, 68, 18, false); woodRect(g, LIFT.x - 34, LIFT.yb + 16, 68, 22, false);
-    // rail hangers (brass rods from posts)
-    function rod(x0, y0, x1, y1) { g.strokeStyle = '#6d5220'; g.lineWidth = 3; g.beginPath(); g.moveTo(x0, y0); g.lineTo(x1, y1); g.stroke(); g.strokeStyle = 'rgba(255,230,160,.5)'; g.lineWidth = 1; g.beginPath(); g.moveTo(x0, y0 - 1); g.lineTo(x1, y1 - 1); g.stroke(); }
-    rod(950, RAILS.min.hy, RAILS.min.hx, RAILS.min.hy); rod(100, RAILS.five.hy, RAILS.five.hx, RAILS.five.hy); rod(950, RAILS.hour.hy, RAILS.hour.hx, RAILS.hour.hy);
-    // engraved brass plaques
-    function plaque(t, x, y) { g.font = '600 13px Georgia,serif'; var w = g.measureText(t).width + 18;
-      var pg = g.createLinearGradient(0, y - 12, 0, y + 6); pg.addColorStop(0, '#d8b660'); pg.addColorStop(.5, '#a07a2c'); pg.addColorStop(1, '#6a4e18');
-      g.fillStyle = 'rgba(0,0,0,.5)'; g.fillRect(x - w / 2 + 2, y - 12, w, 19); g.fillStyle = pg; g.fillRect(x - w / 2, y - 14, w, 19);
-      g.fillStyle = 'rgba(40,25,5,.85)'; g.textAlign = 'center'; g.fillText(t, x, y); g.fillStyle = 'rgba(255,240,190,.35)'; g.fillText(t, x, y + 1); }
-    plaque('MINUTES', 560, 112); plaque('FIVE MINUTES', 480, 248); plaque('HOURS', 520, 378);
-    // reservoir tray: walnut channel with lip
-    g.fillStyle = 'rgba(0,0,0,.55)'; g.beginPath(); g.moveTo(TRAY.x0, TRAY.y0 + 10); g.lineTo(TRAY.x1 + 12, TRAY.y1 + 10); g.lineTo(TRAY.x1 + 12, TRAY.y1 + 34); g.lineTo(TRAY.x0, TRAY.y0 + 34); g.fill();
-    g.save(); g.beginPath(); g.moveTo(TRAY.x0, TRAY.y0); g.lineTo(TRAY.x1 + 12, TRAY.y1); g.lineTo(TRAY.x1 + 12, TRAY.y1 + 20); g.lineTo(TRAY.x0, TRAY.y0 + 20); g.clip();
-    g.drawImage(woodH, 0, 40, 800, 30, TRAY.x0, TRAY.y0, 800, 42); var tg = g.createLinearGradient(0, TRAY.y0, 0, TRAY.y1 + 20); tg.addColorStop(0, 'rgba(255,225,180,.35)'); tg.addColorStop(.2, 'rgba(0,0,0,0)'); tg.addColorStop(1, 'rgba(0,0,0,.5)'); g.fillStyle = tg; g.fillRect(0, 0, 1000, 700); g.restore();
-    woodRect(g, TRAY.x0 - 10, TRAY.y0 - 26, 12, 46, true);
-    // base slab
-    g.fillStyle = 'rgba(0,0,0,.7)'; g.fillRect(50, 690, 950, 14);
-    woodRect(g, 48, 668, 944, 24, false);
-    g.fillStyle = 'rgba(255,225,180,.35)'; g.fillRect(48, 668, 944, 1.5);
-    // vignette (separate layer, drawn on top)
+    // wall
+    var wg = g.createLinearGradient(-300, 0, 1300, 0); wg.addColorStop(0, '#efe9df'); wg.addColorStop(.6, '#ddd5c9'); wg.addColorStop(1, '#c9c0b3');
+    g.fillStyle = wg; g.fillRect(-1500, -800, 4000, 1300);
+    // reddish-brown wood tabletop
+    g.save(); g.beginPath(); g.rect(-1500, 470, 4000, 900); g.clip();
+    g.drawImage(woodH, -900, 470, 2800, 330); g.drawImage(woodH, 0, 0, 1100, 120, -900, 800, 2800, 700);
+    g.fillStyle = 'rgba(120,35,15,.35)'; g.fillRect(-1500, 470, 4000, 900);
+    var tg = g.createLinearGradient(0, 470, 0, 760); tg.addColorStop(0, 'rgba(255,220,190,.25)'); tg.addColorStop(.4, 'rgba(0,0,0,0)'); tg.addColorStop(1, 'rgba(0,0,0,.35)'); g.fillStyle = tg; g.fillRect(-1500, 470, 4000, 900);
+    g.restore();
+    // shadow of the clock on the table
+    var sg = g.createRadialGradient(520, 690, 50, 520, 690, 560); sg.addColorStop(0, 'rgba(0,0,0,.55)'); sg.addColorStop(1, 'rgba(0,0,0,0)');
+    g.save(); g.scale(1, .18); g.fillStyle = sg; g.fillRect(-200, 690 / .18 - 600, 1500, 1200); g.restore();
+    // charcoal base box with top face
+    var bg = g.createLinearGradient(0, 640, 0, 696); bg.addColorStop(0, '#3b3b3f'); bg.addColorStop(.12, '#2a2a2d'); bg.addColorStop(1, '#141415');
+    g.fillStyle = '#323236'; g.beginPath(); g.moveTo(80, 628); g.lineTo(920, 628); g.lineTo(945, 646); g.lineTo(55, 646); g.fill();
+    g.fillStyle = bg; g.fillRect(55, 646, 890, 50); g.fillStyle = 'rgba(255,255,255,.12)'; g.fillRect(55, 646, 890, 1);
+    // rear frame and tower housing
+    var bp = [175, 395, 645, 840]; for (var i = 0; i < bp.length; i++) { g.globalAlpha = .85; plastic(g, bp[i], 130 + i * 6, 12, 500); }
+    g.globalAlpha = 1;
+    plastic(g, 425, 70, 190, 560);
+    g.fillStyle = '#060607'; g.beginPath(); g.arc(520, 138, 56, 0, 7); g.fill();       // dial window recess
+    // rear return chute (5-min -> hours)
+    g.save(); var ca = Math.atan2(CHUTE.y1 - CHUTE.y0, CHUTE.x1 - CHUTE.x0); g.translate(CHUTE.x0 - 8, CHUTE.y0); g.rotate(ca);
+    var Lc = dist(CHUTE.x0, CHUTE.y0, CHUTE.x1, CHUTE.y1) + 16; g.fillStyle = '#0d0d0f'; g.fillRect(0, 0, Lc, 9); g.fillStyle = 'rgba(255,255,255,.1)'; g.fillRect(0, 0, Lc, 1);
+    g.fillStyle = '#18181b'; g.fillRect(0, -10, Lc, 3); g.restore();
+    // V-shaped reservoir trough (behind the front frame)
+    g.fillStyle = '#0b0b0d'; g.beginPath(); g.moveTo(TRAY.x0, trayY(TRAY.x0) + R - 2); g.lineTo(TRAY.cx, TRAY.cy); g.lineTo(TRAY.x1, trayY(TRAY.x1) + R - 2); g.lineTo(TRAY.x1, TRAY.cy + 12); g.lineTo(TRAY.x0, TRAY.cy + 12); g.fill();
+    g.strokeStyle = 'rgba(255,255,255,.14)'; g.lineWidth = 1; g.beginPath(); g.moveTo(TRAY.x0, trayY(TRAY.x0) + R); g.lineTo(TRAY.cx, TRAY.cy + 1); g.lineTo(TRAY.x1, trayY(TRAY.x1) + R); g.stroke();
+    // front picket frame (drawn over the balls)
+    frontL = newLayer(); var f = L(frontL);
+    picket(f, 108, 150, 640, 18); picket(f, 292, 178, 640, 18); picket(f, 655, 160, 640, 18); picket(f, 872, 166, 640, 18);
+    f.fillStyle = '#0e0e10'; f.fillRect(100, 628, 800, 6); f.fillStyle = 'rgba(255,255,255,.12)'; f.fillRect(100, 628, 800, 1);
+    // vignette
     vignL = newLayer(); var v = L(vignL); v.setTransform(1, 0, 0, 1, 0, 0);
-    var vg = v.createRadialGradient(cv.width / 2, cv.height * .45, Math.min(cv.width, cv.height) * .35, cv.width / 2, cv.height / 2, Math.max(cv.width, cv.height) * .75);
-    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.6)'); v.fillStyle = vg; v.fillRect(0, 0, cv.width, cv.height);
+    var vg = v.createRadialGradient(cv.width * .42, cv.height * .4, Math.min(cv.width, cv.height) * .35, cv.width / 2, cv.height / 2, Math.max(cv.width, cv.height) * .8);
+    vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,.45)'); v.fillStyle = vg; v.fillRect(0, 0, cv.width, cv.height);
   }
   function resize() {
     dpr = Q ? Math.min(window.devicePixelRatio || 1, 2) : 1;
@@ -275,72 +293,83 @@ if (typeof document !== 'undefined') (function () {
     buildStatic();
   }
   // ---------- dynamic parts ----------
-  function brassGrad(y0, y1) { var g = cx.createLinearGradient(0, y0, 0, y1); g.addColorStop(0, '#5a4214'); g.addColorStop(.25, '#f7e3a0'); g.addColorStop(.45, '#c99d40'); g.addColorStop(.8, '#7d5c1e'); g.addColorStop(1, '#3a2a0a'); return g; }
-  function drawRail(r, t) {
-    var a = tipAngle(r, t), ang = Math.atan2(r.ly - r.hy, r.lx - r.hx);
+  var armA = Math.PI / 2;
+  function drawDialAndArm(dt) {
+    var target = Math.PI / 2;
+    if (liftBall && liftBall.segs.length && liftBall.segs[0].e === 'arc' && liftBall.arm) target = liftBall.arm;
+    else if (liftBall && liftBall.arm && liftBall.segs.length && liftBall.segs[0].e === 'in' && liftBall.y > ARM.y) target = Math.PI / 2;
+    if (target !== Math.PI / 2) armA = target; else armA += (Math.PI / 2 - armA) * Math.min(1, dt / 350);
+    // cream dial disk behind the round window turns with the drive
+    cx.save(); cx.beginPath(); cx.arc(520, 138, 50, 0, 7); cx.clip();
+    var dg = cx.createRadialGradient(505, 120, 5, 520, 138, 52); dg.addColorStop(0, '#fbf6e8'); dg.addColorStop(.8, '#e4dcc6'); dg.addColorStop(1, '#a89f8a'); cx.fillStyle = dg; cx.fillRect(460, 80, 120, 120);
+    cx.translate(520, 138); cx.rotate(armA * 1.0); cx.fillStyle = '#1a1a1a';
+    cx.beginPath(); cx.moveTo(-6, -46); cx.lineTo(6, -46); cx.lineTo(3, -6); cx.lineTo(-3, -6); cx.fill();
+    for (var i = 0; i < 12; i++) { cx.rotate(Math.PI / 6); cx.fillRect(-1, 40, 2, 7); }
+    cx.restore();
+    cx.strokeStyle = '#000'; cx.lineWidth = 6; cx.beginPath(); cx.arc(520, 138, 52, 0, 7); cx.stroke();
+    cx.strokeStyle = 'rgba(255,255,255,.25)'; cx.lineWidth = 1; cx.beginPath(); cx.arc(520, 138, 55, 3.4, 5.2); cx.stroke();
+    // pick-up arm
+    cx.save(); cx.translate(ARM.x, ARM.y); cx.rotate(armA);
+    var ag = cx.createLinearGradient(0, -7, 0, 7); ag.addColorStop(0, '#3a3a3f'); ag.addColorStop(.4, '#141416'); ag.addColorStop(1, '#030304');
+    cx.fillStyle = ag; cx.fillRect(-20, -7, ARM.r + 4, 14);
+    cx.fillRect(ARM.r - 2, -R - 4, 6, 2 * R + 8);                 // cup lip
+    cx.restore();
+    var hg = cx.createRadialGradient(ARM.x - 5, ARM.y - 5, 1, ARM.x, ARM.y, 22); hg.addColorStop(0, '#45454b'); hg.addColorStop(1, '#050506');
+    cx.fillStyle = hg; cx.beginPath(); cx.arc(ARM.x, ARM.y, 20, 0, 7); cx.fill();
+    cx.fillStyle = '#8a8a90'; cx.beginPath(); cx.arc(ARM.x, ARM.y, 3, 0, 7); cx.fill();
+  }
+  function railLabels(key) {
+    var r = RAILS[key], n = key === 'min' ? 4 : (key === 'five' ? 11 : 12), a = tipAngle(r, now);
+    var ta = Math.atan2(r.hy - r.ly, r.hx - r.lx); if (Math.cos(ta) < 0) ta += Math.PI; ta += a;
+    cx.fillStyle = 'rgba(244,242,236,.92)'; cx.font = 'bold 12px "Helvetica Neue",Helvetica,Arial,sans-serif'; cx.textAlign = 'center';
+    for (var i = 0; i < n; i++) {
+      var t = key === 'min' ? String(i + 1) : key === 'hour' ? String(i + 1) : (i % 2 ? '-' : String(5 * (i + 1)));
+      var d = R + 4 + i * SP, p = rot(r, { x: r.lx + r.ux * d, y: r.ly + r.uy * d + 12 }, a);
+      cx.save(); cx.translate(p.x, p.y); cx.rotate(ta); cx.fillText(t, 0, 0); cx.restore(); }
+    if (key !== 'hour') { var e = key === 'min' ? { x: r.hx, y: r.hy } : { x: r.lx, y: r.ly }, dir = key === 'min' ? 1 : -1;
+      var q = rot(r, { x: e.x + r.ux * dir * -0 + (key === 'min' ? -r.ux * -14 : r.ux * -0) , y: e.y + 12 }, a);
+      cx.font = 'bold 8px Helvetica,Arial,sans-serif'; cx.save(); cx.translate(q.x + (key === 'min' ? 2 : -2), q.y); cx.rotate(ta); cx.fillText('MIN', 0, 0); cx.restore(); }
+  }
+  function drawRail(key) {
+    var r = RAILS[key], a = tipAngle(r, now), ang = Math.atan2(r.ly - r.hy, r.lx - r.hx), sg = Math.cos(ang) > 0 ? 1 : -1;
     cx.save(); cx.translate(r.hx, r.hy); cx.rotate(ang + a);
-    var Lr = r.len + 8;
-    // back wire (farther, darker), front wire
-    cx.fillStyle = 'rgba(0,0,0,.4)'; cx.fillRect(0, -1, Lr, 7);
-    cx.globalAlpha = .55; cx.fillStyle = brassGrad(-7, -2); cx.fillRect(0, -7, Lr, 4); cx.globalAlpha = 1;
-    cx.fillStyle = brassGrad(-3, 3); cx.fillRect(0, -3, Lr, 6);
-    if (Q) { // brushed streaks + moving specular glint
-      cx.fillStyle = 'rgba(255,248,215,.55)'; cx.fillRect(0, -2, Lr, 0.8);
-      var gx = (Lr * 0.3 + a * 900) ; var sg = cx.createLinearGradient(gx - 60, 0, gx + 60, 0); sg.addColorStop(0, 'rgba(255,255,240,0)'); sg.addColorStop(.5, 'rgba(255,255,240,.6)'); sg.addColorStop(1, 'rgba(255,255,240,0)');
-      cx.fillStyle = sg; cx.fillRect(gx - 60, -2.5, 120, 2); }
-    // end stop
-    cx.fillStyle = brassGrad(-22, 3); var es = (r.ux > 0 ? 1 : 1); cx.fillRect(Lr - 4, -22, 5, 25); cx.fillStyle = 'rgba(255,240,200,.5)'; cx.fillRect(Lr - 4, -22, 1, 25);
+    var ext = 26, Lr = r.len + 10;
+    var g = cx.createLinearGradient(0, 0, 0, 17 * sg); g.addColorStop(0, '#3b3b40'); g.addColorStop(.12, '#18181b'); g.addColorStop(.9, '#0a0a0b'); g.addColorStop(1, '#000');
+    cx.fillStyle = 'rgba(0,0,0,.25)'; cx.fillRect(-ext, 17 * sg, Lr + ext, 4 * sg);
+    cx.fillStyle = g; cx.fillRect(-ext, 0, Lr + ext, 17 * sg);
+    cx.fillStyle = 'rgba(255,255,255,.28)'; cx.fillRect(-ext, 0, Lr + ext, sg * .9);
+    if (Q) { var gx = Lr * .35 + a * 1500, sh = cx.createLinearGradient(gx - 80, 0, gx + 80, 0); sh.addColorStop(0, 'rgba(255,255,255,0)'); sh.addColorStop(.5, 'rgba(255,255,255,.12)'); sh.addColorStop(1, 'rgba(255,255,255,0)'); cx.fillStyle = sh; cx.fillRect(gx - 80, sg, 160, 4 * sg); }
+    cx.fillStyle = '#121214'; cx.fillRect(Lr - 4, -12 * sg, 5, 29 * sg);    // end stop at the low end
     cx.restore();
-    // pivot boss
-    cx.fillStyle = '#2b1a0c'; cx.beginPath(); cx.arc(r.hx, r.hy, 8, 0, 7); cx.fill();
-    var pg = cx.createRadialGradient(r.hx - 2, r.hy - 2, 0, r.hx, r.hy, 6); pg.addColorStop(0, '#fff2c0'); pg.addColorStop(.5, '#c99d40'); pg.addColorStop(1, '#5a4214');
-    cx.fillStyle = pg; cx.beginPath(); cx.arc(r.hx, r.hy, 5.5, 0, 7); cx.fill();
+    railLabels(key);
   }
-  var screwPhase = 0;
-  function drawScrew() {
-    var x = LIFT.x, y0 = LIFT.yt - 26, y1 = LIFT.yb + 16, w = 12;
-    if (liftBall && liftBall.y < LIFT.yb - 1 && liftBall.y > LIFT.yt + 1) screwPhase = -liftBall.y;
-    var cg = cx.createLinearGradient(x - w, 0, x + w, 0); cg.addColorStop(0, '#3a2a0a'); cg.addColorStop(.3, '#e9cf82'); cg.addColorStop(.45, '#fff4cc'); cg.addColorStop(.7, '#9a7426'); cg.addColorStop(1, '#2a1d06');
-    cx.fillStyle = cg; cx.fillRect(x - w, y0, 2 * w, y1 - y0);
-    // helical thread (pitch 30px) that advances with the ball
-    var P = 30, ph = ((screwPhase % P) + P) % P;
-    cx.save(); cx.beginPath(); cx.rect(x - w, y0, 2 * w, y1 - y0); cx.clip();
-    cx.lineWidth = 3;
-    for (var y = y0 - P + ph; y < y1 + P; y += P) {
-      cx.strokeStyle = 'rgba(30,20,5,.75)'; cx.beginPath(); cx.moveTo(x - w, y); cx.quadraticCurveTo(x, y + P * .32, x + w, y + P * .5); cx.stroke();
-      cx.strokeStyle = 'rgba(255,240,190,.55)'; cx.lineWidth = 1; cx.beginPath(); cx.moveTo(x - w, y - 2); cx.quadraticCurveTo(x, y + P * .32 - 2, x + w, y + P * .5 - 2); cx.stroke(); cx.lineWidth = 3; }
-    cx.restore();
-    // guide rods
-    cx.strokeStyle = '#8a6a26'; cx.lineWidth = 2.5; cx.beginPath(); cx.moveTo(x - 22, y0); cx.lineTo(x - 22, y1); cx.moveTo(x + 22, y0); cx.lineTo(x + 22, y1); cx.stroke();
-    cx.strokeStyle = 'rgba(255,240,190,.5)'; cx.lineWidth = 0.8; cx.beginPath(); cx.moveTo(x - 23, y0); cx.lineTo(x - 23, y1); cx.moveTo(x + 21, y0); cx.lineTo(x + 21, y1); cx.stroke();
-  }
-  function surfaceBelow(b) {   // y of the surface under a ball (for contact shadows / AO)
-    var best = TRAY.y0 + 30, ks = ['min', 'five', 'hour'];
-    for (var i = 0; i < ks.length; i++) { var r = RAILS[ks[i]], lo = Math.min(r.lx, r.hx), hi = Math.max(r.lx, r.hx);
+  function surfaceBelow(b) {
+    var best = TRAY.cy + 30, ks = ['min', 'five', 'hour'];
+    for (var i = 0; i < ks.length && !b.back; i++) { var r = RAILS[ks[i]], lo = Math.min(r.lx, r.hx), hi = Math.max(r.lx, r.hx);
       if (b.x >= lo - 4 && b.x <= hi + 4) { var y = r.ly + (b.x - r.lx) / (r.hx - r.lx) * (r.hy - r.ly); if (y >= b.y + R - 2 && y < best) best = y; } }
-    if (b.x > TRAY.x0 && b.x < TRAY.x1 + 10) { var ty = trayY(b.x) + R + 2; if (ty >= b.y + R - 2 && ty < best) best = ty; }
-    if (Math.abs(b.x - LIFT.x) < 3) best = Math.min(best, b.y + R + 2);
+    if (b.x > TRAY.x0 && b.x < TRAY.x1) { var ty = trayY(b.x) + R + 1; if (ty >= b.y + R - 2 && ty < best) best = ty; }
     return best; }
-  function drawBalls() {
+  function drawBalls(back) {
     var all = balls.concat([fixedBall]), s = 2 * R + 0.5, i, b;
-    if (Q) for (i = 0; i < all.length; i++) {   // contact shadow + ambient occlusion
-      b = all[i]; var sy = surfaceBelow(b), gap = sy - (b.y + R), k = Math.max(0, 1 - gap / 60);
-      if (k <= 0) continue; cx.globalAlpha = 0.85 * k; var ww = R * (2.2 + gap / 25);
-      cx.drawImage(shadowSpr, b.x - ww + 2, sy - ww * .22, ww * 2, ww * .45); }
+    if (Q) for (i = 0; i < all.length; i++) { b = all[i]; if (!!b.back !== back) continue;
+      var sy = surfaceBelow(b), gap = sy - (b.y + R), k = Math.max(0, 1 - gap / 50); if (k <= 0) continue;
+      cx.globalAlpha = 0.7 * k; var ww = R * (2 + gap / 25); cx.drawImage(shadowSpr, b.x - ww + 2, sy - ww * .22, ww * 2, ww * .45); }
     cx.globalAlpha = 1;
-    for (i = 0; i < all.length; i++) { b = all[i];
+    for (i = 0; i < all.length; i++) { b = all[i]; if (!!b.back !== back) continue;
       cx.drawImage(ballSpr, b.x - s / 2, b.y - s / 2, s, s);
-      // faint machining mark that turns with the ball (shows true rolling)
       var mx = b.x + Math.cos(b.rot) * R * .55, my = b.y + Math.sin(b.rot) * R * .55;
-      cx.fillStyle = 'rgba(20,20,22,.22)'; cx.beginPath(); cx.arc(mx, my, 1.4, 0, 7); cx.fill();
-      cx.fillStyle = 'rgba(20,20,22,.12)'; cx.beginPath(); cx.arc(2 * b.x - mx, 2 * b.y - my, 1.1, 0, 7); cx.fill(); }
-    cx.strokeStyle = 'rgba(214,170,80,.75)'; cx.lineWidth = 1.5; cx.beginPath(); cx.arc(fixedBall.x, fixedBall.y, R + 2, 0, 7); cx.stroke();
+      cx.fillStyle = 'rgba(20,20,22,.22)'; cx.beginPath(); cx.arc(mx, my, 1.1, 0, 7); cx.fill();
+      if (back) { cx.fillStyle = 'rgba(0,0,0,.28)'; cx.beginPath(); cx.arc(b.x, b.y, R, 0, 7); cx.fill(); } }
   }
+  var lastDraw = 0;
   function draw(t) {
+    var dt = Math.min(100, t - lastDraw || 16); lastDraw = t;
     cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(staticL, 0, 0);
     cx.setTransform(sc, 0, 0, sc, ox, oy);
-    drawScrew(); drawRail(RAILS.min, t); drawRail(RAILS.five, t); drawRail(RAILS.hour, t); drawBalls();
-    if (Q) { cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(vignL, 0, 0); }
+    drawDialAndArm(dt); drawBalls(true);
+    drawRail('min'); drawRail('five'); drawRail('hour'); drawBalls(false);
+    cx.setTransform(1, 0, 0, 1, 0, 0); cx.drawImage(frontL, 0, 0);
+    if (Q) cx.drawImage(vignL, 0, 0);
   }
   // ---------- sound (synthesized steel clack; off by default) ----------
   var AC = null, lastSnd = 0;
